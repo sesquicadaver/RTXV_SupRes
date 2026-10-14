@@ -1,5 +1,7 @@
 #include "rtx_processor.hpp"
 
+#include "color.hpp"
+
 #include <chrono>
 #include <stdexcept>
 #include <utility>
@@ -20,22 +22,15 @@ namespace rtx {
 namespace {
 
 void launch_nv12_to_bgra(const uint8_t* y, int y_pitch, const uint8_t* uv, int uv_pitch, uint8_t* bgra, int bgra_pitch,
-                         int width, int height, CUstream stream);
+                         int width, int height, ColorCoeffs color, CUstream stream);
 void launch_bgra_to_nv12(const uint8_t* bgra, int bgra_pitch, uint8_t* y, int y_pitch, uint8_t* uv, int uv_pitch,
-                         int width, int height, CUstream stream);
-
-__device__ int clamp_u8(int value) {
-  if (value < 0) {
-    return 0;
-  }
-  if (value > 255) {
-    return 255;
-  }
-  return value;
-}
+                         int width, int height, ColorCoeffs color, CUstream stream);
+void launch_nv12_scale(const uint8_t* src_y, int src_y_pitch, const uint8_t* src_uv, int src_uv_pitch, int src_w,
+                       int src_h, uint8_t* dst_y, int dst_y_pitch, uint8_t* dst_uv, int dst_uv_pitch, int dst_w,
+                       int dst_h, CUstream stream);
 
 __global__ void nv12_to_bgra_kernel(const uint8_t* y, int y_pitch, const uint8_t* uv, int uv_pitch, uint8_t* bgra,
-                                    int bgra_pitch, int width, int height) {
+                                    int bgra_pitch, int width, int height, ColorCoeffs color) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || row >= height) {
@@ -45,28 +40,30 @@ __global__ void nv12_to_bgra_kernel(const uint8_t* y, int y_pitch, const uint8_t
   const int uv_x = x & ~1;
   const int chroma_u = static_cast<int>(uv[(row / 2) * uv_pitch + uv_x]);
   const int chroma_v = static_cast<int>(uv[(row / 2) * uv_pitch + uv_x + 1]);
-  const int c = luma - 16;
-  const int d = chroma_u - 128;
-  const int e = chroma_v - 128;
+  int red = 0;
+  int green = 0;
+  int blue = 0;
+  yuv_to_rgb(color, luma, chroma_u, chroma_v, red, green, blue);
   uint8_t* pixel = bgra + row * bgra_pitch + x * 4;
-  pixel[0] = static_cast<uint8_t>(clamp_u8((298 * c + 516 * d + 128) >> 8));
-  pixel[1] = static_cast<uint8_t>(clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8));
-  pixel[2] = static_cast<uint8_t>(clamp_u8((298 * c + 409 * e + 128) >> 8));
+  pixel[0] = static_cast<uint8_t>(blue);
+  pixel[1] = static_cast<uint8_t>(green);
+  pixel[2] = static_cast<uint8_t>(red);
   pixel[3] = 255;
 }
 
 __global__ void bgra_to_nv12_kernel(const uint8_t* bgra, int bgra_pitch, uint8_t* y, int y_pitch, uint8_t* uv,
-                                    int uv_pitch, int width, int height) {
+                                    int uv_pitch, int width, int height, ColorCoeffs color) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || row >= height) {
     return;
   }
   const uint8_t* pixel = bgra + row * bgra_pitch + x * 4;
-  const int b = pixel[0];
-  const int g = pixel[1];
-  const int r = pixel[2];
-  y[row * y_pitch + x] = static_cast<uint8_t>(clamp_u8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16));
+  int luma = 0;
+  int chroma_u = 0;
+  int chroma_v = 0;
+  rgb_to_yuv(color, pixel[2], pixel[1], pixel[0], luma, chroma_u, chroma_v);
+  y[row * y_pitch + x] = static_cast<uint8_t>(luma);
   if ((x & 1) != 0 || (row & 1) != 0) {
     return;
   }
@@ -84,23 +81,55 @@ __global__ void bgra_to_nv12_kernel(const uint8_t* bgra, int bgra_pitch, uint8_t
   red /= 4;
   green /= 4;
   blue /= 4;
+  rgb_to_yuv(color, red, green, blue, luma, chroma_u, chroma_v);
   uint8_t* chroma = uv + (row / 2) * uv_pitch + x;
-  chroma[0] = static_cast<uint8_t>(clamp_u8(((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128));
-  chroma[1] = static_cast<uint8_t>(clamp_u8(((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128));
+  chroma[0] = static_cast<uint8_t>(chroma_u);
+  chroma[1] = static_cast<uint8_t>(chroma_v);
+}
+
+__global__ void nv12_scale_kernel(const uint8_t* src_y, int src_y_pitch, const uint8_t* src_uv, int src_uv_pitch,
+                                  int src_w, int src_h, uint8_t* dst_y, int dst_y_pitch, uint8_t* dst_uv,
+                                  int dst_uv_pitch, int dst_w, int dst_h) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= dst_w || row >= dst_h || src_w < 2 || src_h < 2) {
+    return;
+  }
+  const int sx = x * src_w / dst_w;
+  const int sy = row * src_h / dst_h;
+  dst_y[row * dst_y_pitch + x] = src_y[sy * src_y_pitch + sx];
+  if ((x & 1) != 0 || (row & 1) != 0) {
+    return;
+  }
+  const int su = sx & ~1;
+  const int sv = sy / 2;
+  const uint8_t* src_pair = src_uv + sv * src_uv_pitch + su;
+  uint8_t* dst_pair = dst_uv + (row / 2) * dst_uv_pitch + x;
+  dst_pair[0] = src_pair[0];
+  dst_pair[1] = src_pair[1];
 }
 
 void launch_nv12_to_bgra(const uint8_t* y, int y_pitch, const uint8_t* uv, int uv_pitch, uint8_t* bgra, int bgra_pitch,
-                         int width, int height, CUstream stream) {
+                         int width, int height, ColorCoeffs color, CUstream stream) {
   const dim3 block(16, 16);
   const dim3 grid((width + 15) / 16, (height + 15) / 16);
-  nv12_to_bgra_kernel<<<grid, block, 0, stream>>>(y, y_pitch, uv, uv_pitch, bgra, bgra_pitch, width, height);
+  nv12_to_bgra_kernel<<<grid, block, 0, stream>>>(y, y_pitch, uv, uv_pitch, bgra, bgra_pitch, width, height, color);
 }
 
 void launch_bgra_to_nv12(const uint8_t* bgra, int bgra_pitch, uint8_t* y, int y_pitch, uint8_t* uv, int uv_pitch,
-                         int width, int height, CUstream stream) {
+                         int width, int height, ColorCoeffs color, CUstream stream) {
   const dim3 block(16, 16);
   const dim3 grid((width + 15) / 16, (height + 15) / 16);
-  bgra_to_nv12_kernel<<<grid, block, 0, stream>>>(bgra, bgra_pitch, y, y_pitch, uv, uv_pitch, width, height);
+  bgra_to_nv12_kernel<<<grid, block, 0, stream>>>(bgra, bgra_pitch, y, y_pitch, uv, uv_pitch, width, height, color);
+}
+
+void launch_nv12_scale(const uint8_t* src_y, int src_y_pitch, const uint8_t* src_uv, int src_uv_pitch, int src_w,
+                       int src_h, uint8_t* dst_y, int dst_y_pitch, uint8_t* dst_uv, int dst_uv_pitch, int dst_w,
+                       int dst_h, CUstream stream) {
+  const dim3 block(16, 16);
+  const dim3 grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+  nv12_scale_kernel<<<grid, block, 0, stream>>>(src_y, src_y_pitch, src_uv, src_uv_pitch, src_w, src_h, dst_y,
+                                                dst_y_pitch, dst_uv, dst_uv_pitch, dst_w, dst_h);
 }
 
 std::string cuda_text(CUresult result) {
@@ -129,6 +158,7 @@ class RtxProcessor final : public FrameProcessor {
 
   bool open(AVBufferRef* hw_device, int src_w, int src_h, int scale, int quality) override {
     close();
+    degraded_ = false;
     if (hw_device == nullptr || src_w < 2 || src_h < 2 || (scale != 2 && scale != 3)) {
       error_ = "некоректні параметри RTX VSR";
       return false;
@@ -171,17 +201,7 @@ class RtxProcessor final : public FrameProcessor {
   int output_height() const override { return dst_h_; }
 
   bool process(AVFrame* input, AVFrame* output, double& process_ms) override {
-    if (!opened_ || input == nullptr || output == nullptr || input->hw_frames_ctx == nullptr) {
-      error_ = "RTX VSR не готовий";
-      return false;
-    }
-    auto* frames = reinterpret_cast<AVHWFramesContext*>(input->hw_frames_ctx->data);
-    if (frames->sw_format != AV_PIX_FMT_NV12) {
-      error_ = "RTX-шлях очікує NV12 у пам'яті GPU";
-      return false;
-    }
-    if (input->width != src_w_ || input->height != src_h_ || output->width != dst_w_ || output->height != dst_h_) {
-      error_ = "розмір кадру не збігається з відкритим сеансом RTX VSR";
+    if (!ready(input, output)) {
       return false;
     }
     ContextGuard guard(context_);
@@ -190,8 +210,16 @@ class RtxProcessor final : public FrameProcessor {
       return false;
     }
     const auto started = std::chrono::steady_clock::now();
+    if (degraded_) {
+      if (!scale_nv12(input, output)) {
+        return false;
+      }
+      process_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+      return true;
+    }
+    const ColorCoeffs color = coeffs_for(choose_color(input->colorspace, input->color_range, input->width, input->height));
     launch_nv12_to_bgra(input->data[0], input->linesize[0], input->data[1], input->linesize[1], src_bgra_,
-                        static_cast<int>(src_pitch_), src_w_, src_h_, stream_);
+                        static_cast<int>(src_pitch_), src_w_, src_h_, color, stream_);
     if (!copy_device_to_array(src_bgra_, src_pitch_, src_array_, src_w_, src_h_)) {
       return false;
     }
@@ -201,20 +229,41 @@ class RtxProcessor final : public FrameProcessor {
     vsr.QualityLevel = quality_;
     if (!rtx_video_api_cuda_evaluate(src_tex_, dst_surf_, source, destination, &vsr, nullptr)) {
       error_ = "rtx_video_api_cuda_evaluate повернув помилку";
-      return false;
+      degraded_ = true;
+      if (!scale_nv12(input, output)) {
+        return false;
+      }
+      process_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+      return true;
     }
     if (!copy_array_to_device(dst_array_, dst_bgra_, dst_pitch_, dst_w_, dst_h_)) {
       return false;
     }
     launch_bgra_to_nv12(dst_bgra_, static_cast<int>(dst_pitch_), output->data[0], output->linesize[0], output->data[1],
-                        output->linesize[1], dst_w_, dst_h_, stream_);
+                        output->linesize[1], dst_w_, dst_h_, color, stream_);
     if (cuStreamSynchronize(stream_) != CUDA_SUCCESS || cudaGetLastError() != cudaSuccess) {
       error_ = "CUDA-потік RTX VSR завершився з помилкою";
       return false;
     }
+    stamp_color(input, output);
     process_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     return true;
   }
+
+  bool fallback(AVFrame* input, AVFrame* output) override {
+    if (!ready(input, output)) {
+      return false;
+    }
+    ContextGuard guard(context_);
+    if (!guard.active()) {
+      error_ = "втрачено CUDA-контекст";
+      return false;
+    }
+    degraded_ = true;
+    return scale_nv12(input, output);
+  }
+
+  bool degraded() const override { return degraded_; }
 
   void set_quality(int quality) override { quality_ = clamp_quality(quality); }
   int quality() const override { return quality_; }
@@ -257,6 +306,7 @@ class RtxProcessor final : public FrameProcessor {
     }
     stream_ = nullptr;
     external_stream_ = false;
+    degraded_ = false;
     if (context_ != nullptr) {
       cuCtxPopCurrent(nullptr);
       context_ = nullptr;
@@ -264,6 +314,43 @@ class RtxProcessor final : public FrameProcessor {
   }
 
  private:
+  bool ready(AVFrame* input, AVFrame* output) {
+    if (!opened_ || input == nullptr || output == nullptr || input->hw_frames_ctx == nullptr) {
+      error_ = "RTX VSR не готовий";
+      return false;
+    }
+    auto* frames = reinterpret_cast<AVHWFramesContext*>(input->hw_frames_ctx->data);
+    if (frames->sw_format != AV_PIX_FMT_NV12) {
+      error_ = "RTX-шлях очікує NV12 у пам'яті GPU";
+      return false;
+    }
+    if (input->width != src_w_ || input->height != src_h_ || output->width != dst_w_ || output->height != dst_h_) {
+      error_ = "розмір кадру не збігається з відкритим сеансом RTX VSR";
+      return false;
+    }
+    return true;
+  }
+
+  void stamp_color(const AVFrame* input, AVFrame* output) const {
+    const ColorChoice choice = choose_color(input->colorspace, input->color_range, input->width, input->height);
+    output->colorspace = static_cast<AVColorSpace>(av_space(choice));
+    output->color_range = static_cast<AVColorRange>(av_range(choice));
+    output->color_primaries = static_cast<AVColorPrimaries>(av_primaries(choice));
+    output->color_trc = static_cast<AVColorTransferCharacteristic>(av_trc(choice));
+  }
+
+  bool scale_nv12(AVFrame* input, AVFrame* output) {
+    launch_nv12_scale(input->data[0], input->linesize[0], input->data[1], input->linesize[1], src_w_, src_h_,
+                      output->data[0], output->linesize[0], output->data[1], output->linesize[1], dst_w_, dst_h_,
+                      stream_);
+    if (cuStreamSynchronize(stream_) != CUDA_SUCCESS || cudaGetLastError() != cudaSuccess) {
+      error_ = "резервний масштаб CUDA завершився з помилкою";
+      return false;
+    }
+    stamp_color(input, output);
+    return true;
+  }
+
   static int clamp_quality(int quality) {
     if (quality < 1) {
       return 1;
@@ -296,13 +383,15 @@ class RtxProcessor final : public FrameProcessor {
       error_ = "не вдалося створити вхідну текстуру RTX";
       return false;
     }
-    CUDA_ARRAY_DESCRIPTOR destination{};
+    CUDA_ARRAY3D_DESCRIPTOR destination{};
     destination.Width = static_cast<size_t>(dst_w_);
     destination.Height = static_cast<size_t>(dst_h_);
+    destination.Depth = 0;
     destination.Format = CU_AD_FORMAT_UNSIGNED_INT8;
     destination.NumChannels = 4;
-    if (cuArrayCreate(&dst_array_, &destination) != CUDA_SUCCESS) {
-      error_ = "не вдалося виділити вихідний CUDA-масив";
+    destination.Flags = CUDA_ARRAY3D_SURFACE_LDST;
+    if (cuArray3DCreate(&dst_array_, &destination) != CUDA_SUCCESS) {
+      error_ = "не вдалося виділити вихідний CUDA-масив із surface load/store";
       return false;
     }
     CUDA_RESOURCE_DESC destination_resource{};
@@ -381,6 +470,7 @@ class RtxProcessor final : public FrameProcessor {
   int dst_w_ = 0;
   int dst_h_ = 0;
   int quality_ = 2;
+  bool degraded_ = false;
   std::string error_;
 };
 

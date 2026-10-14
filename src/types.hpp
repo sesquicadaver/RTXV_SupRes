@@ -26,6 +26,8 @@ struct Endpoint {
   int rtp_port_max = -1;
   int rtcp_port = -1;
   std::string directory;
+  std::string payload;
+  std::string sdp;
   std::vector<std::pair<std::string, std::string>> params;
 };
 
@@ -47,6 +49,8 @@ struct BuiltEndpoint {
   std::string public_url;
   std::string format;
   std::map<std::string, std::string> format_options;
+  std::map<std::string, std::string> protocol_options;
+  std::string sdp_path;
   bool application_hls = false;
   std::string serve_host;
   int serve_port = -1;
@@ -95,6 +99,12 @@ struct Metrics {
   std::uint64_t frames_dropped = 0;
   double last_process_ms = 0;
   double avg_process_ms = 0;
+  double last_decode_ms = 0;
+  double last_wait_ms = 0;
+  double last_encode_ms = 0;
+  double last_write_ms = 0;
+  double last_total_ms = 0;
+  double avg_total_ms = 0;
   int vsr_quality = 0;
   int vsr_scale = 0;
   std::string vsr_state;

@@ -17,4 +17,25 @@ jobs:
           cmake --build build -j"$(nproc)"
           ctest --test-dir build --output-on-failure
           ./build/rtx-vsr-proxy capabilities --json > /tmp/modes.json
-          python3 -c 'import json; d=json.load(open("/tmp/modes.json")); assert d["modes"]; assert all(m["protocol"]!="gopher" for m in d["modes"])'
+          python3 -c 'import json; d=json.load(open("/tmp/modes.json")); assert d["modes"]; assert all(m["protocol"]!="gopher" for m in d["modes"]); rtp=[m for m in d["modes"] if m["protocol"]=="rtp" and m["direction"]=="output"]; assert {m["container"] for m in rtp}=={"mpegts","rtp"}'
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-ffmpeg
+      - name: Configure, build, test
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure

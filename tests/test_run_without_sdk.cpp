@@ -1,7 +1,7 @@
 #include "catalog.hpp"
+#include "check.hpp"
 #include "pipeline.hpp"
 
-#include <cassert>
 #include <cstdio>
 #include <fstream>
 
@@ -21,7 +21,7 @@ int main() {
   settings.output.remote_port = 5600;
   settings.scale = 2;
   const int code = rtx::run_proxy(settings, rtx::discover_modes(), rtx::ffmpeg_probe());
-  assert(code == 3);
+  CHECK(code == 3);
   std::remove(path);
-  return 0;
+  return rtx_test::result();
 }

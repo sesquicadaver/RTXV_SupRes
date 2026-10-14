@@ -17,6 +17,13 @@ class FrameProcessor {
   virtual int output_width() const = 0;
   virtual int output_height() const = 0;
   virtual bool process(AVFrame* input, AVFrame* output, double& process_ms) = 0;
+  // Сумісний кадр без VSR. Розмір виходу лишається розміром відкритого сеансу.
+  virtual bool fallback(AVFrame* input, AVFrame* output) {
+    (void)input;
+    (void)output;
+    return false;
+  }
+  virtual bool degraded() const { return false; }
   virtual void set_quality(int quality) = 0;
   virtual int quality() const = 0;
   virtual const std::string& last_error() const = 0;

@@ -1,6 +1,6 @@
 #include "metrics.hpp"
+#include "check.hpp"
 
-#include <cassert>
 #include <string>
 
 int main() {
@@ -11,12 +11,14 @@ int main() {
   metrics.frames_dropped = 2;
   metrics.last_process_ms = 6.25;
   metrics.avg_process_ms = 7.5;
+  metrics.last_total_ms = 12.5;
   metrics.vsr_quality = 2;
   metrics.vsr_scale = 2;
   metrics.vsr_state = "degraded";
   const std::string json = rtx::metrics_json(metrics);
-  assert(json.find("\"frames_dropped\":2") != std::string::npos);
-  assert(json.find("\"vsr_state\":\"degraded\"") != std::string::npos);
-  assert(json.find("\"vsr_quality\":2") != std::string::npos);
-  return 0;
+  CHECK(json.find("\"frames_dropped\":2") != std::string::npos);
+  CHECK(json.find("\"vsr_state\":\"degraded\"") != std::string::npos);
+  CHECK(json.find("\"vsr_quality\":2") != std::string::npos);
+  CHECK(json.find("\"last_total_ms\":12.50") != std::string::npos);
+  return rtx_test::result();
 }

@@ -38,8 +38,13 @@ void print_help() {
     --input-protocol rtsp --input-role client --input-url rtsp://192.168.1.20:554/live \
     --output-protocol srt --output-role listener --output-local-port 9000
 
+RTP: --input-payload і --output-payload mpegts (типово), h264, hevc або es.
+Елементарний вихід пише SDP у --output-sdp. Елементарний вхід читає --input-path файл.sdp.
+
 Якість за замовчуванням адаптивна, старт з рівня 2. Масштаб 2 або 3.
-Метрики йдуть у stderr як JSON: fps, frames_dropped, last_process_ms, vsr_quality, vsr_state.
+Якщо масштаб 3 не вкладається в інтервал першого кадру, до відкриття виходу він падає до 2.
+Метрики у stderr: fps, frames_dropped, last_total_ms, last_process_ms, vsr_quality, vsr_state.
+vsr_state: running, degraded, overloaded, bypass.
 )";
 }
 
@@ -127,6 +132,14 @@ bool assign_endpoint_flag(Endpoint& endpoint, const std::string& flag, const std
   }
   if (flag == "directory") {
     endpoint.directory = value;
+    return true;
+  }
+  if (flag == "payload") {
+    endpoint.payload = value;
+    return true;
+  }
+  if (flag == "sdp") {
+    endpoint.sdp = value;
     return true;
   }
   if (flag == "param") {
@@ -328,14 +341,24 @@ int cli_main(int argc, char** argv) {
   }
   if (command == "doctor") {
     const DependencyReport report = inspect_dependencies();
-    std::cout << report.sdk_note << '\n' << report.cuda_note << '\n';
+    Settings probe_settings = settings;
+    if (probe_settings.codec != "h264" && probe_settings.codec != "hevc") {
+      probe_settings.codec = "h264";
+    }
+    const std::string blockers = dependency_blockers(probe_settings, report);
+    std::cout << (blockers.empty() ? report.sdk_note + "\n" + report.cuda_note + "\n" : blockers);
     std::cout << "h264_nvenc: " << (report.nvenc_h264 ? "так" : "ні") << '\n';
     std::cout << "hevc_nvenc: " << (report.nvenc_hevc ? "так" : "ні") << '\n';
     for (const GpuInfo& gpu : report.gpus) {
       std::cout << "GPU " << gpu.index << " " << gpu.name << " CC " << gpu.cc_major << '.' << gpu.cc_minor << '\n';
     }
     std::cout << "режимів: " << modes.size() << '\n';
-    return report.sdk_built && !report.gpus.empty() && report.nvenc_h264 ? 0 : 3;
+    if (!blockers.empty()) {
+      std::cout << "ефект RTX VSR: не підтверджено\n";
+      return 3;
+    }
+    std::cout << "ефект RTX VSR: створення перевірено\n";
+    return 0;
   }
   if (command != "run") {
     print_help();

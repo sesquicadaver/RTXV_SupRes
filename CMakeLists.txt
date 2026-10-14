@@ -5,14 +5,36 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libavutil)
+endif()
+if(NOT TARGET PkgConfig::FFMPEG)
+  set(FFMPEG_ROOT "$ENV{FFMPEG_ROOT}" CACHE PATH "Корінь зібраного FFmpeg, якщо немає pkg-config")
+  find_path(FFMPEG_INCLUDE_DIR libavformat/avformat.h HINTS "${FFMPEG_ROOT}/include")
+  find_library(AVFORMAT_LIBRARY NAMES avformat HINTS "${FFMPEG_ROOT}/lib" "${FFMPEG_ROOT}/lib/x64")
+  find_library(AVCODEC_LIBRARY NAMES avcodec HINTS "${FFMPEG_ROOT}/lib" "${FFMPEG_ROOT}/lib/x64")
+  find_library(AVUTIL_LIBRARY NAMES avutil HINTS "${FFMPEG_ROOT}/lib" "${FFMPEG_ROOT}/lib/x64")
+  if(NOT FFMPEG_INCLUDE_DIR OR NOT AVFORMAT_LIBRARY OR NOT AVCODEC_LIBRARY OR NOT AVUTIL_LIBRARY)
+    message(FATAL_ERROR "FFmpeg не знайдено. Потрібен pkg-config із libavformat/libavcodec/libavutil або FFMPEG_ROOT.")
+  endif()
+  add_library(ffmpeg_manual INTERFACE)
+  target_include_directories(ffmpeg_manual INTERFACE "${FFMPEG_INCLUDE_DIR}")
+  target_link_libraries(ffmpeg_manual INTERFACE "${AVFORMAT_LIBRARY}" "${AVCODEC_LIBRARY}" "${AVUTIL_LIBRARY}")
+endif()
+if(TARGET PkgConfig::FFMPEG)
+  set(RTX_FFMPEG PkgConfig::FFMPEG)
+else()
+  set(RTX_FFMPEG ffmpeg_manual)
+endif()
 find_package(Threads REQUIRED)
 
 add_library(rtx_core STATIC
   src/types.cpp
   src/adaptive.cpp
   src/metrics.cpp
+  src/timestamps.cpp
+  src/color.cpp
   src/endpoint.cpp
   src/catalog.cpp
   src/gpu_probe.cpp
@@ -22,8 +44,16 @@ add_library(rtx_core STATIC
   src/cli.cpp
 )
 target_include_directories(rtx_core PUBLIC src)
-target_link_libraries(rtx_core PUBLIC PkgConfig::FFMPEG Threads::Threads)
-target_compile_options(rtx_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(rtx_core PUBLIC ${RTX_FFMPEG} Threads::Threads)
+if(MSVC)
+  target_compile_options(rtx_core PRIVATE /W3)
+else()
+  target_compile_options(rtx_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if(WIN32)
+  target_compile_definitions(rtx_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(rtx_core PUBLIC ws2_32)
+endif()
 
 set(RTX_VIDEO_SDK_ROOT "$ENV{RTX_VIDEO_SDK_ROOT}" CACHE PATH "Корінь NVIDIA RTX Video SDK")
 find_package(CUDAToolkit QUIET)
@@ -61,9 +91,9 @@ add_executable(rtx-vsr-proxy src/main.cpp)
 target_link_libraries(rtx-vsr-proxy PRIVATE rtx_core)
 
 enable_testing()
-foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk)
+foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk timestamps color transport)
   add_executable(test_${test_name} tests/test_${test_name}.cpp)
   target_link_libraries(test_${test_name} PRIVATE rtx_core)
   add_test(NAME ${test_name} COMMAND test_${test_name})
 endforeach()
-set_tests_properties(run_without_sdk PROPERTIES TIMEOUT 20)
+set_tests_properties(run_without_sdk transport PROPERTIES TIMEOUT 20)

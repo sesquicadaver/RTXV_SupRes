@@ -19,6 +19,6 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
                            BuiltEndpoint& built);
 
 const Mode* find_mode(const std::vector<Mode>& modes, Direction direction, const std::string& protocol,
-                      const std::string& role);
+                      const std::string& role, const std::string& container = {});
 
 }  // namespace rtx

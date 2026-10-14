@@ -64,6 +64,9 @@ bool field_set(const Endpoint& endpoint, const std::string& name) {
   if (name == "directory") {
     return is_set_string(endpoint.directory);
   }
+  if (name == "sdp") {
+    return is_set_string(endpoint.sdp);
+  }
   if (name == "params") {
     return !endpoint.params.empty();
   }
@@ -159,8 +162,22 @@ std::string join_query(const std::string& base, const std::map<std::string, std:
 
 bool is_output(const Mode& mode) { return mode.direction == Direction::Output; }
 
+bool legacy_query(const std::string& protocol) {
+  return protocol == "udp" || protocol == "udplite" || protocol == "srt" || protocol == "rtp";
+}
+
+void place_protocol(const std::string& protocol, std::map<std::string, std::string>& query,
+                    std::map<std::string, std::string>& protocol_options, const std::string& key,
+                    const std::string& value) {
+  protocol_options[key] = value;
+  if (legacy_query(protocol)) {
+    query[key] = value;
+  }
+}
+
 std::string apply_user_params(const Endpoint& endpoint, const Mode& mode, const OptionProbe& probe,
                               std::map<std::string, std::string>& query,
+                              std::map<std::string, std::string>& protocol_options,
                               std::map<std::string, std::string>& format_options) {
   const bool output = is_output(mode);
   const std::string& format_name = mode.ffmpeg_name.empty() ? mode.protocol : mode.ffmpeg_name;
@@ -169,7 +186,7 @@ std::string apply_user_params(const Endpoint& endpoint, const Mode& mode, const 
       return "порожнє ім'я параметра";
     }
     if (probe.protocol_option(mode.protocol, param.first, output)) {
-      query[param.first] = param.second;
+      place_protocol(mode.protocol, query, protocol_options, param.first, param.second);
       continue;
     }
     if (probe.format_option(format_name, param.first, output) ||
@@ -185,9 +202,10 @@ std::string apply_user_params(const Endpoint& endpoint, const Mode& mode, const 
 }
 
 void add_protocol_default(const OptionProbe& probe, const Mode& mode, const std::string& key,
-                          const std::string& value, std::map<std::string, std::string>& query) {
-  if (probe.protocol_option(mode.protocol, key, is_output(mode))) {
-    put_default(query, key, value);
+                          const std::string& value, std::map<std::string, std::string>& query,
+                          std::map<std::string, std::string>& protocol_options) {
+  if (probe.protocol_option(mode.protocol, key, is_output(mode)) && protocol_options.find(key) == protocol_options.end()) {
+    place_protocol(mode.protocol, query, protocol_options, key, value);
   }
 }
 
@@ -217,6 +235,9 @@ int resolved_remote_port(const Endpoint& endpoint) {
 }
 
 std::string build_location_url(const Endpoint& endpoint, const Mode& mode, std::string& error) {
+  if (mode.container == "sdp") {
+    return endpoint.path;
+  }
   if (!endpoint.url.empty()) {
     return endpoint.url;
   }
@@ -259,17 +280,27 @@ std::string build_location_url(const Endpoint& endpoint, const Mode& mode, std::
 }  // namespace
 
 const Mode* find_mode(const std::vector<Mode>& modes, Direction direction, const std::string& protocol,
-                      const std::string& role_text) {
+                      const std::string& role_text, const std::string& container) {
   Role role{};
   if (!parse_role(role_text, role)) {
     return nullptr;
   }
+  const Mode* found = nullptr;
   for (const Mode& mode : modes) {
-    if (mode.direction == direction && mode.protocol == protocol && mode.role == role) {
-      return &mode;
+    if (mode.direction != direction || mode.protocol != protocol || mode.role != role) {
+      continue;
+    }
+    if (!container.empty()) {
+      if (mode.container == container) {
+        return &mode;
+      }
+      continue;
+    }
+    if (found == nullptr || (mode.container == "mpegts" && found->container != "mpegts")) {
+      found = &mode;
     }
   }
-  return nullptr;
+  return found;
 }
 
 std::string validate_endpoint(const Endpoint& endpoint, const Mode& mode) {
@@ -306,10 +337,17 @@ std::string validate_endpoint(const Endpoint& endpoint, const Mode& mode) {
   if (endpoint.rtp_port_min > 0 && endpoint.rtp_port_min > endpoint.rtp_port_max) {
     return "rtp_port_min більший за rtp_port_max";
   }
+  if (!endpoint.payload.empty() && endpoint.protocol != "rtp") {
+    return "payload використовується лише для rtp";
+  }
+  if (!endpoint.payload.empty() && endpoint.payload != "mpegts" && endpoint.payload != "h264" &&
+      endpoint.payload != "hevc" && endpoint.payload != "es") {
+    return "payload для rtp: mpegts, h264, hevc або es";
+  }
 
-  const char* location_names[] = {"path",        "remote_host", "remote_port", "local_host", "local_port",
-                                  "app",         "playpath",    "directory",   "rtp_port_min", "rtp_port_max",
-                                  "rtcp_port"};
+  const char* location_names[] = {"path",     "remote_host", "remote_port", "local_host",   "local_port",
+                                  "app",      "playpath",    "directory",   "rtp_port_min", "rtp_port_max",
+                                  "rtcp_port", "sdp"};
   if (!endpoint.params.empty() && !allowed_field(mode, "params")) {
     return "параметри підключення не використовуються в цьому режимі";
   }
@@ -353,6 +391,13 @@ std::string validate_endpoint(const Endpoint& endpoint, const Mode& mode) {
       return "вхідний файл не знайдено";
     }
   }
+  if (mode.container == "sdp" && mode.direction == Direction::Input) {
+    std::error_code error;
+    const std::filesystem::path file(endpoint.path);
+    if (!std::filesystem::is_regular_file(file, error) || error) {
+      return "файл SDP не знайдено";
+    }
+  }
   return {};
 }
 
@@ -365,6 +410,7 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
   built = BuiltEndpoint{};
   built.format = mode.container;
   std::map<std::string, std::string> query;
+  std::map<std::string, std::string> protocol_options;
   std::string error;
   std::string url = build_location_url(endpoint, mode, error);
   if (!error.empty()) {
@@ -373,16 +419,16 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
 
   if (endpoint.protocol == "udp" || endpoint.protocol == "udplite") {
     if (mode.direction == Direction::Input) {
-      add_protocol_default(probe, mode, "overrun_nonfatal", "1", query);
-      add_protocol_default(probe, mode, "fifo_size", "64", query);
-      add_protocol_default(probe, mode, "reuse", "1", query);
+      add_protocol_default(probe, mode, "overrun_nonfatal", "1", query, protocol_options);
+      add_protocol_default(probe, mode, "fifo_size", "64", query, protocol_options);
+      add_protocol_default(probe, mode, "reuse", "1", query, protocol_options);
     } else {
-      add_protocol_default(probe, mode, "pkt_size", "1316", query);
+      add_protocol_default(probe, mode, "pkt_size", "1316", query, protocol_options);
       if (endpoint.local_port > 0) {
-        add_protocol_default(probe, mode, "localport", std::to_string(endpoint.local_port), query);
+        add_protocol_default(probe, mode, "localport", std::to_string(endpoint.local_port), query, protocol_options);
       }
       if (!endpoint.local_host.empty()) {
-        add_protocol_default(probe, mode, "localaddr", endpoint.local_host, query);
+        add_protocol_default(probe, mode, "localaddr", endpoint.local_host, query, protocol_options);
       }
     }
   } else if (endpoint.protocol == "srt") {
@@ -398,33 +444,36 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
     } else if (mode.role == Role::Rendezvous) {
       srt_mode = "rendezvous";
     }
-    add_protocol_default(probe, mode, "mode", srt_mode, query);
-    add_protocol_default(probe, mode, "latency", "20000", query);
-    add_protocol_default(probe, mode, "tlpktdrop", "1", query);
-    add_protocol_default(probe, mode, "transtype", "live", query);
+    add_protocol_default(probe, mode, "mode", srt_mode, query, protocol_options);
+    add_protocol_default(probe, mode, "latency", "20000", query, protocol_options);
+    add_protocol_default(probe, mode, "tlpktdrop", "1", query, protocol_options);
+    add_protocol_default(probe, mode, "transtype", "live", query, protocol_options);
   } else if (endpoint.protocol == "tcp") {
     if (mode.role == Role::Listener || mode.role == Role::Server) {
-      add_protocol_default(probe, mode, "listen", "1", query);
+      add_protocol_default(probe, mode, "listen", "1", query, protocol_options);
     }
-    add_protocol_default(probe, mode, "tcp_nodelay", "1", query);
+    add_protocol_default(probe, mode, "tcp_nodelay", "1", query, protocol_options);
   } else if (endpoint.protocol == "http" || endpoint.protocol == "https") {
     if (mode.role == Role::Listener || mode.role == Role::Server) {
-      add_protocol_default(probe, mode, "listen", "1", query);
+      add_protocol_default(probe, mode, "listen", "1", query, protocol_options);
     }
-  } else if (endpoint.protocol == "rtp") {
+  } else if (endpoint.protocol == "rtp" && mode.container != "sdp") {
+    if (mode.container == "rtp") {
+      built.sdp_path = endpoint.sdp;
+    }
     if (endpoint.rtcp_port > 0) {
-      add_protocol_default(probe, mode, "rtcp_port", std::to_string(endpoint.rtcp_port), query);
+      add_protocol_default(probe, mode, "rtcp_port", std::to_string(endpoint.rtcp_port), query, protocol_options);
     }
     if (mode.direction == Direction::Output && endpoint.local_port > 0) {
-      add_protocol_default(probe, mode, "local_rtpport", std::to_string(endpoint.local_port), query);
+      add_protocol_default(probe, mode, "local_rtpport", std::to_string(endpoint.local_port), query, protocol_options);
     }
   } else if (endpoint.protocol == "rtmp" || endpoint.protocol == "rtmps" || endpoint.protocol == "rtmpt" ||
              endpoint.protocol == "rtmpts") {
     if (mode.direction == Direction::Input) {
-      add_protocol_default(probe, mode, "rtmp_live", "-1", query);
-      add_protocol_default(probe, mode, "rtmp_buffer", "0", query);
+      add_protocol_default(probe, mode, "rtmp_live", "-1", query, protocol_options);
+      add_protocol_default(probe, mode, "rtmp_buffer", "0", query, protocol_options);
       if (mode.role == Role::Listener) {
-        add_protocol_default(probe, mode, "rtmp_listen", "1", query);
+        add_protocol_default(probe, mode, "rtmp_listen", "1", query, protocol_options);
       }
     }
   } else if (endpoint.protocol == "rtsp") {
@@ -448,10 +497,12 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
     built.format = "hls";
   }
 
-  const std::string params_error = apply_user_params(endpoint, mode, probe, query, built.format_options);
+  const std::string params_error =
+      apply_user_params(endpoint, mode, probe, query, protocol_options, built.format_options);
   if (!params_error.empty()) {
     return params_error;
   }
+  built.protocol_options = std::move(protocol_options);
   if (!(endpoint.protocol == "hls" && mode.role == Role::Server && endpoint.url.empty())) {
     built.ffmpeg_url = join_query(url, query);
   }

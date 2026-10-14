@@ -2,8 +2,9 @@
 
 namespace rtx {
 
-// Адаптація інтенсивності RTX VSR. Роздільність не змінюється:
-// інакше довелося б перестворювати кодер посеред потоку.
+// Адаптація якості RTX VSR. process_ms — повний час кадру
+// (декод, очікування, VSR, кодер, запис), budget_ms — інтервал кадру.
+// Два повільні кадри знижують рівень, вісім швидких підвищують.
 class AdaptiveQuality {
  public:
   AdaptiveQuality(int initial, int min_quality, int max_quality, bool automatic);

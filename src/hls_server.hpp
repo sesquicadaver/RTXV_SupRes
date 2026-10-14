@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 
@@ -21,7 +22,7 @@ class HlsServer {
   void loop();
 
   std::atomic<bool> running_{false};
-  int listen_fd_ = -1;
+  std::intptr_t listen_fd_ = -1;
   std::string root_;
   std::thread thread_;
 };

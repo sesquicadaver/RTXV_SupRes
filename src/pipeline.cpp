@@ -1,28 +1,32 @@
 #include "pipeline.hpp"
 
 #include "adaptive.hpp"
+#include "color.hpp"
 #include "dependencies.hpp"
 #include "hls_server.hpp"
 #include "mailbox.hpp"
 #include "metrics.hpp"
+#include "platform.hpp"
 #include "processor.hpp"
+#include "timestamps.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
-#include <unistd.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
+#include <libavutil/version.h>
 }
 
 namespace rtx {
@@ -35,6 +39,11 @@ void on_signal(int) {
     g_running->store(false);
   }
 }
+
+struct FrameTiming {
+  std::chrono::steady_clock::time_point decoded_at{};
+  double decode_ms = 0;
+};
 
 std::string ffmpeg_error(int status) {
   char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
@@ -57,6 +66,10 @@ std::string redact(std::string url) {
   const auto end = url.find('&', pos);
   url.replace(pos + key.size(), end == std::string::npos ? std::string::npos : end - (pos + key.size()), "***");
   return url;
+}
+
+double elapsed_ms(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point to) {
+  return std::chrono::duration<double, std::milli>(to - from).count();
 }
 
 AVDictionary* to_dict(const std::map<std::string, std::string>& options) {
@@ -95,6 +108,10 @@ int interrupt_cb(void* opaque) {
 }
 
 void free_frame(AVFrame* frame) {
+  if (frame != nullptr && frame->opaque != nullptr) {
+    delete static_cast<FrameTiming*>(frame->opaque);
+    frame->opaque = nullptr;
+  }
   AVFrame* local = frame;
   av_frame_free(&local);
 }
@@ -150,10 +167,21 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
   return {};
 }
 
+std::string rtp_container(const Endpoint& endpoint, Direction direction) {
+  if (endpoint.protocol != "rtp") {
+    return {};
+  }
+  const bool elementary = endpoint.payload == "h264" || endpoint.payload == "hevc" || endpoint.payload == "es";
+  if (!elementary) {
+    return "mpegts";
+  }
+  return direction == Direction::Input ? "sdp" : "rtp";
+}
+
 void prepare_hls(BuiltEndpoint& output, HlsServer& server) {
   namespace fs = std::filesystem;
   if (output.serve_root.empty()) {
-    output.serve_root = (fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(::getpid()))).string();
+    output.serve_root = (fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(process_id()))).string();
   }
   fs::create_directories(output.serve_root);
   output.ffmpeg_url = (fs::path(output.serve_root) / "index.m3u8").string();
@@ -167,6 +195,21 @@ void prepare_hls(BuiltEndpoint& output, HlsServer& server) {
   }
 }
 
+void apply_color(AVCodecContext* encoder, const ColorChoice& color) {
+  encoder->colorspace = static_cast<AVColorSpace>(av_space(color));
+  encoder->color_range = static_cast<AVColorRange>(av_range(color));
+  encoder->color_primaries = static_cast<AVColorPrimaries>(av_primaries(color));
+  encoder->color_trc = static_cast<AVColorTransferCharacteristic>(av_trc(color));
+}
+
+void set_frame_duration(AVFrame* frame) {
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+  frame->duration = 1;
+#else
+  frame->pkt_duration = 1;
+#endif
+}
+
 struct Session {
   std::atomic<bool> running{true};
   AVFormatContext* input = nullptr;
@@ -175,7 +218,6 @@ struct Session {
   AVCodecContext* encoder = nullptr;
   AVBufferRef* hw_device = nullptr;
   AVBufferRef* hw_frames = nullptr;
-  AVFrame* decode_frame = nullptr;
   AVPacket* packet = nullptr;
   std::unique_ptr<FrameProcessor> processor;
   LatestSlot<AVFrame> mailbox{free_frame};
@@ -184,21 +226,23 @@ struct Session {
   std::mutex error_mu;
   std::string error;
   bool header_written = false;
+  bool bypass_logged = false;
   int video_index = -1;
-  int dst_w = 0;
-  int dst_h = 0;
+  int active_scale = 2;
   double budget_ms = 33.3;
+  double frame_write_ms = 0;
+  AVRational input_tb{1, 90000};
+  PtsMap pts;
   AdaptiveQuality quality{2, 1, 4, true};
+  std::string sdp_path;
 
   explicit Session(const Settings& settings)
-      : quality(settings.quality, settings.quality_min, settings.quality_max, settings.quality_auto) {}
+      : active_scale(settings.scale),
+        quality(settings.quality, settings.quality_min, settings.quality_max, settings.quality_auto) {}
 
   ~Session() {
     if (packet != nullptr) {
       av_packet_free(&packet);
-    }
-    if (decode_frame != nullptr) {
-      av_frame_free(&decode_frame);
     }
     if (decoder != nullptr) {
       avcodec_free_context(&decoder);
@@ -242,7 +286,7 @@ struct Session {
     }
     context->interrupt_callback.callback = interrupt_cb;
     context->interrupt_callback.opaque = &running;
-    const bool live = settings.input.protocol != "file";
+    const bool live = settings.input.protocol != "file" && built.format != "sdp";
     if (live) {
       context->flags |= AVFMT_FLAG_NOBUFFER;
       context->probesize = 256 * 1024;
@@ -259,6 +303,9 @@ struct Session {
       }
     }
     AVDictionary* options = to_dict(built.format_options);
+    for (const auto& option : built.protocol_options) {
+      av_dict_set(&options, option.first.c_str(), option.second.c_str(), 0);
+    }
     const int status = avformat_open_input(&context, built.ffmpeg_url.c_str(), const_cast<AVInputFormat*>(format), &options);
     if (status < 0) {
       av_dict_free(&options);
@@ -275,6 +322,7 @@ struct Session {
 
   void open_decoder(const Settings& settings) {
     AVStream* stream = input->streams[video_index];
+    input_tb = stream->time_base;
     const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
     if (codec == nullptr) {
       throw std::runtime_error("немає декодера для вхідного відео");
@@ -300,19 +348,81 @@ struct Session {
     if (decoder->width < 2 || decoder->height < 2 || decoder->width % 2 != 0 || decoder->height % 2 != 0) {
       throw std::runtime_error("NVDEC і NVENC потребують парних ширини й висоти");
     }
+    AVRational rate = stream->avg_frame_rate;
+    if (rate.num <= 0 || rate.den <= 0) {
+      rate = stream->r_frame_rate;
+    }
+    if (rate.num <= 0 || rate.den <= 0) {
+      rate = AVRational{30, 1};
+    }
+    budget_ms = 1000.0 * static_cast<double>(rate.den) / static_cast<double>(rate.num);
   }
 
-  void open_processor_and_encoder(const Settings& settings, BuiltEndpoint& built) {
+  void open_processor(const Settings& settings) {
     processor = create_frame_processor();
     if (!processor) {
       throw std::runtime_error("обробник RTX Video SDK не зібрано");
     }
-    const int initial = quality.quality();
-    if (!processor->open(hw_device, decoder->width, decoder->height, settings.scale, initial)) {
+    active_scale = settings.scale;
+    if (!processor->open(hw_device, decoder->width, decoder->height, active_scale, quality.quality())) {
+      const std::string first_error = processor->last_error();
+      if (active_scale == 3 && quality.automatic() &&
+          processor->open(hw_device, decoder->width, decoder->height, 2, quality.quality())) {
+        active_scale = 2;
+        std::cerr << "масштаб 3 недоступний, лишаю 2\n";
+      } else {
+        throw std::runtime_error(first_error);
+      }
+    }
+  }
+
+  AVFrame* make_scratch(int width, int height) {
+    AVBufferRef* pool = av_hwframe_ctx_alloc(hw_device);
+    if (pool == nullptr) {
+      return nullptr;
+    }
+    auto* frames = reinterpret_cast<AVHWFramesContext*>(pool->data);
+    frames->format = AV_PIX_FMT_CUDA;
+    frames->sw_format = AV_PIX_FMT_NV12;
+    frames->width = width;
+    frames->height = height;
+    frames->initial_pool_size = 2;
+    if (av_hwframe_ctx_init(pool) < 0) {
+      av_buffer_unref(&pool);
+      return nullptr;
+    }
+    AVFrame* frame = av_frame_alloc();
+    if (frame == nullptr || av_hwframe_get_buffer(pool, frame, 0) < 0) {
+      av_frame_free(&frame);
+      av_buffer_unref(&pool);
+      return nullptr;
+    }
+    av_buffer_unref(&pool);
+    return frame;
+  }
+
+  void maybe_reduce_scale(AVFrame* frame) {
+    if (active_scale != 3 || !quality.automatic() || frame == nullptr) {
+      return;
+    }
+    AVFrame* scratch = make_scratch(processor->output_width(), processor->output_height());
+    double process_ms = 0;
+    const bool ok = scratch != nullptr && processor->process(frame, scratch, process_ms);
+    av_frame_free(&scratch);
+    if (!ok || process_ms <= budget_ms * 0.85) {
+      return;
+    }
+    std::cerr << "масштаб 3 довший за бюджет кадру (" << process_ms << " мс), переходжу на 2\n";
+    processor->close();
+    if (!processor->open(hw_device, decoder->width, decoder->height, 2, quality.quality())) {
       throw std::runtime_error(processor->last_error());
     }
-    dst_w = processor->output_width();
-    dst_h = processor->output_height();
+    active_scale = 2;
+  }
+
+  void open_encoder(const Settings& settings, BuiltEndpoint& built) {
+    const int dst_w = processor->output_width();
+    const int dst_h = processor->output_height();
     const char* encoder_name = settings.codec == "hevc" ? "hevc_nvenc" : "h264_nvenc";
     const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
     if (codec == nullptr) {
@@ -342,16 +452,13 @@ struct Session {
     if (rate.num <= 0 || rate.den <= 0) {
       rate = AVRational{30, 1};
     }
-    budget_ms = 1000.0 * static_cast<double>(rate.den) / static_cast<double>(rate.num);
     encoder->width = dst_w;
     encoder->height = dst_h;
     encoder->framerate = rate;
     encoder->time_base = av_inv_q(rate);
     encoder->pix_fmt = AV_PIX_FMT_CUDA;
-    encoder->color_range = AVCOL_RANGE_MPEG;
-    encoder->colorspace = AVCOL_SPC_BT709;
-    encoder->color_primaries = AVCOL_PRI_BT709;
-    encoder->color_trc = AVCOL_TRC_BT709;
+    apply_color(encoder, choose_color(in_stream->codecpar->color_space, in_stream->codecpar->color_range, decoder->width,
+                                      decoder->height));
     const std::int64_t bitrate = choose_bitrate(settings, dst_w, dst_h);
     encoder->bit_rate = bitrate;
     encoder->rc_max_rate = bitrate;
@@ -387,24 +494,52 @@ struct Session {
         throw std::runtime_error("параметр виходу " + option.first + ": " + ffmpeg_error(option_status));
       }
     }
+    if (built.format == "rtp") {
+      const char* payload = settings.codec == "hevc" ? "98" : "96";
+      const int payload_status = av_opt_set(output->priv_data, "payload_type", payload, 0);
+      if (payload_status < 0) {
+        throw std::runtime_error(std::string("payload_type: ") + ffmpeg_error(payload_status));
+      }
+    }
     if (!(output->oformat->flags & AVFMT_NOFILE)) {
-      AVDictionary* io_options = nullptr;
+      AVDictionary* io_options = to_dict(built.protocol_options);
       throw_if(avio_open2(&output->pb, built.ffmpeg_url.c_str(), AVIO_FLAG_WRITE, &output->interrupt_callback, &io_options),
                "відкриття виходу");
-      av_dict_free(&io_options);
+      ensure_consumed(io_options, "вихід");
     }
     throw_if(avformat_write_header(output, nullptr), "заголовок виходу");
     header_written = true;
+    sdp_path = built.sdp_path;
+    if (!sdp_path.empty()) {
+      write_sdp();
+    }
     metrics.vsr_quality = processor->quality();
-    metrics.vsr_scale = settings.scale;
+    metrics.vsr_scale = active_scale;
     metrics.vsr_state = "running";
   }
 
+  void write_sdp() {
+    char buffer[8192];
+    AVFormatContext* contexts[] = {output};
+    throw_if(av_sdp_create(contexts, 1, buffer, static_cast<int>(sizeof(buffer))), "SDP");
+    const std::filesystem::path path(sdp_path);
+    if (path.has_parent_path()) {
+      std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream file(path, std::ios::trunc);
+    if (!file) {
+      throw std::runtime_error("не вдалося записати SDP");
+    }
+    file << buffer;
+  }
+
   void write_packet(AVPacket* encoded) {
+    const auto started = std::chrono::steady_clock::now();
     AVStream* stream = output->streams[0];
     av_packet_rescale_ts(encoded, encoder->time_base, stream->time_base);
     encoded->stream_index = stream->index;
     throw_if(av_interleaved_write_frame(output, encoded), "запис виходу");
+    frame_write_ms += elapsed_ms(started, std::chrono::steady_clock::now());
   }
 
   void drain_encoder() {
@@ -419,6 +554,89 @@ struct Session {
     }
   }
 
+  void stamp(AVFrame* frame, double decode_ms) {
+    auto* timing = new FrameTiming;
+    timing->decode_ms = decode_ms;
+    timing->decoded_at = std::chrono::steady_clock::now();
+    frame->opaque = timing;
+    std::lock_guard<std::mutex> lock(metrics_mu);
+    ++metrics.frames_in;
+  }
+
+  bool next_video_frame(AVPacket* incoming, AVFrame* frame) {
+    auto sent_at = std::chrono::steady_clock::now();
+    bool sent = false;
+    while (running.load()) {
+      const int received = avcodec_receive_frame(decoder, frame);
+      if (received == 0) {
+        if (frame->format != AV_PIX_FMT_CUDA) {
+          fail("декодер віддав кадр не в пам'яті GPU");
+          return false;
+        }
+        const double decode_ms = sent ? elapsed_ms(sent_at, std::chrono::steady_clock::now()) : 0;
+        stamp(frame, decode_ms);
+        return true;
+      }
+      if (received != AVERROR(EAGAIN) && received != AVERROR_EOF) {
+        fail("кадр NVDEC: " + ffmpeg_error(received));
+        return false;
+      }
+      if (received == AVERROR_EOF) {
+        return false;
+      }
+      const int read = av_read_frame(input, incoming);
+      if (read == AVERROR_EOF || read == AVERROR_EXIT) {
+        return false;
+      }
+      if (read < 0) {
+        fail("читання входу: " + ffmpeg_error(read));
+        return false;
+      }
+      if (incoming->stream_index != video_index) {
+        av_packet_unref(incoming);
+        continue;
+      }
+      sent_at = std::chrono::steady_clock::now();
+      const int status = avcodec_send_packet(decoder, incoming);
+      av_packet_unref(incoming);
+      sent = true;
+      if (status < 0 && status != AVERROR(EAGAIN)) {
+        fail("NVDEC: " + ffmpeg_error(status));
+        return false;
+      }
+    }
+    return false;
+  }
+
+  AVFrame* pull_one_frame() {
+    AVPacket* incoming = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    if (incoming == nullptr || frame == nullptr) {
+      av_packet_free(&incoming);
+      av_frame_free(&frame);
+      fail("немає буфера декодера");
+      return nullptr;
+    }
+    if (!next_video_frame(incoming, frame)) {
+      av_packet_free(&incoming);
+      av_frame_free(&frame);
+      if (error.empty()) {
+        fail("немає відеокадру на вході");
+      }
+      return nullptr;
+    }
+    av_packet_free(&incoming);
+    AVFrame* owned = av_frame_alloc();
+    if (owned == nullptr) {
+      av_frame_free(&frame);
+      fail("немає буфера кадру");
+      return nullptr;
+    }
+    av_frame_move_ref(owned, frame);
+    av_frame_free(&frame);
+    return owned;
+  }
+
   void decode_loop() {
     AVPacket* incoming = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
@@ -426,53 +644,130 @@ struct Session {
       fail("немає буфера декодера");
       av_packet_free(&incoming);
       av_frame_free(&frame);
+      running.store(false);
+      mailbox.close();
       return;
     }
     while (running.load()) {
-      const int read = av_read_frame(input, incoming);
-      if (read == AVERROR_EOF || read == AVERROR_EXIT) {
+      if (!next_video_frame(incoming, frame)) {
         break;
       }
-      if (read < 0) {
-        fail("читання входу: " + ffmpeg_error(read));
+      AVFrame* owned = av_frame_alloc();
+      if (owned == nullptr) {
+        fail("немає буфера кадру");
         break;
       }
-      if (incoming->stream_index != video_index) {
-        av_packet_unref(incoming);
-        continue;
-      }
-      int sent = avcodec_send_packet(decoder, incoming);
-      av_packet_unref(incoming);
-      if (sent < 0 && sent != AVERROR(EAGAIN)) {
-        fail("NVDEC: " + ffmpeg_error(sent));
-        break;
-      }
-      while (running.load()) {
-        const int received = avcodec_receive_frame(decoder, frame);
-        if (received == AVERROR(EAGAIN) || received == AVERROR_EOF) {
-          break;
-        }
-        if (received < 0) {
-          fail("кадр NVDEC: " + ffmpeg_error(received));
-          break;
-        }
-        if (frame->format != AV_PIX_FMT_CUDA) {
-          fail("декодер віддав кадр не в пам'яті GPU");
-          break;
-        }
-        {
-          std::lock_guard<std::mutex> lock(metrics_mu);
-          ++metrics.frames_in;
-        }
-        AVFrame* owned = av_frame_alloc();
-        av_frame_move_ref(owned, frame);
-        mailbox.publish(owned);
-      }
+      av_frame_move_ref(owned, frame);
+      mailbox.publish(owned);
     }
     av_packet_free(&incoming);
     av_frame_free(&frame);
     running.store(false);
     mailbox.close();
+  }
+
+  bool handle_frame(AVFrame* input_frame, const Settings& settings, std::uint64_t& window_out,
+                    std::chrono::steady_clock::time_point& last_report) {
+    auto* timing = static_cast<FrameTiming*>(input_frame->opaque);
+    const auto taken = std::chrono::steady_clock::now();
+    const double wait_ms = timing == nullptr ? 0 : elapsed_ms(timing->decoded_at, taken);
+    const double decode_ms = timing == nullptr ? 0 : timing->decode_ms;
+    AVFrame* output_frame = av_frame_alloc();
+    if (output_frame == nullptr || av_hwframe_get_buffer(encoder->hw_frames_ctx, output_frame, 0) < 0) {
+      free_frame(input_frame);
+      av_frame_free(&output_frame);
+      fail("немає вихідного кадру CUDA");
+      return false;
+    }
+    output_frame->pts = map_pts(pts, input_frame->pts, input_tb, encoder->time_base);
+    set_frame_duration(output_frame);
+    double process_ms = 0;
+    bool ok = processor->process(input_frame, output_frame, process_ms);
+    if (!ok) {
+      std::cerr << "VSR: " << processor->last_error() << ", резервний масштаб\n";
+      ok = processor->fallback(input_frame, output_frame);
+    }
+    free_frame(input_frame);
+    if (!ok) {
+      av_frame_free(&output_frame);
+      fail(processor->last_error().empty() ? "резервний масштаб не зібрав кадр" : processor->last_error());
+      return false;
+    }
+    if (processor->degraded() && !bypass_logged) {
+      std::cerr << "VSR вимкнено, кадри йдуть без покращення\n";
+      bypass_logged = true;
+    }
+    const auto encode_started = std::chrono::steady_clock::now();
+    frame_write_ms = 0;
+    int sent = AVERROR(EAGAIN);
+    try {
+      for (int attempt = 0; attempt < 3 && sent == AVERROR(EAGAIN); ++attempt) {
+        if (attempt > 0) {
+          drain_encoder();
+        }
+        sent = avcodec_send_frame(encoder, output_frame);
+      }
+      av_frame_free(&output_frame);
+      if (sent < 0) {
+        fail("NVENC: " + ffmpeg_error(sent));
+        return false;
+      }
+      drain_encoder();
+    } catch (...) {
+      av_frame_free(&output_frame);
+      throw;
+    }
+    const double encode_ms = elapsed_ms(encode_started, std::chrono::steady_clock::now());
+    const double total_ms = decode_ms + wait_ms + process_ms + encode_ms;
+    if (!processor->degraded()) {
+      const bool changed = quality.observe(total_ms, budget_ms);
+      processor->set_quality(quality.quality());
+      if (changed) {
+        std::cerr << "VSR quality -> " << quality.quality() << '\n';
+      }
+    }
+    std::string state = "running";
+    if (processor->degraded()) {
+      state = "bypass";
+    } else if (quality.quality() <= settings.quality_min && total_ms > budget_ms * 0.85) {
+      state = "overloaded";
+    } else if (quality.quality() < settings.quality_max) {
+      state = "degraded";
+    }
+    {
+      std::lock_guard<std::mutex> lock(metrics_mu);
+      ++metrics.frames_out;
+      ++window_out;
+      metrics.frames_dropped = mailbox.dropped();
+      metrics.last_process_ms = process_ms;
+      metrics.avg_process_ms = metrics.avg_process_ms == 0 ? process_ms : metrics.avg_process_ms * 0.9 + process_ms * 0.1;
+      metrics.last_decode_ms = decode_ms;
+      metrics.last_wait_ms = wait_ms;
+      metrics.last_encode_ms = encode_ms;
+      metrics.last_write_ms = frame_write_ms;
+      metrics.last_total_ms = total_ms;
+      metrics.avg_total_ms = metrics.avg_total_ms == 0 ? total_ms : metrics.avg_total_ms * 0.9 + total_ms * 0.1;
+      metrics.vsr_quality = processor->degraded() ? 0 : processor->quality();
+      metrics.vsr_scale = active_scale;
+      metrics.vsr_state = state;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (settings.metrics_interval > 0 && now - last_report >= std::chrono::duration<double>(settings.metrics_interval)) {
+      const double seconds = std::chrono::duration<double>(now - last_report).count();
+      Metrics snapshot;
+      {
+        std::lock_guard<std::mutex> lock(metrics_mu);
+        metrics.fps = seconds > 0 ? static_cast<double>(window_out) / seconds : 0;
+        snapshot = metrics;
+      }
+      std::cerr << metrics_json(snapshot) << '\n';
+      if (!settings.metrics_file.empty() && !write_metrics_file(settings.metrics_file, snapshot)) {
+        std::cerr << "не вдалося записати файл метрик\n";
+      }
+      window_out = 0;
+      last_report = now;
+    }
+    return true;
   }
 
   void process_loop(const Settings& settings) {
@@ -487,79 +782,16 @@ struct Session {
         }
         continue;
       }
-      AVFrame* output_frame = av_frame_alloc();
-      if (output_frame == nullptr || av_hwframe_get_buffer(encoder->hw_frames_ctx, output_frame, 0) < 0) {
-        free_frame(input_frame);
-        av_frame_free(&output_frame);
-        fail("немає вихідного кадру CUDA");
-        break;
-      }
-      output_frame->pts = input_frame->pts;
-      double process_ms = 0;
-      const bool ok = processor->process(input_frame, output_frame, process_ms);
-      free_frame(input_frame);
-      if (!ok) {
-        av_frame_free(&output_frame);
-        fail(processor->last_error());
-        break;
-      }
-      const bool changed = quality.observe(process_ms, budget_ms);
-      processor->set_quality(quality.quality());
-      if (changed) {
-        std::cerr << "VSR quality -> " << quality.quality() << '\n';
-      }
-      int sent = AVERROR(EAGAIN);
-      for (int attempt = 0; attempt < 3 && sent == AVERROR(EAGAIN); ++attempt) {
-        if (attempt > 0) {
-          try {
-            drain_encoder();
-          } catch (const std::exception& ex) {
-            av_frame_free(&output_frame);
-            fail(ex.what());
-            return;
-          }
-        }
-        sent = avcodec_send_frame(encoder, output_frame);
-      }
-      av_frame_free(&output_frame);
-      if (sent < 0) {
-        fail("NVENC: " + ffmpeg_error(sent));
-        break;
-      }
       try {
-        drain_encoder();
+        if (!handle_frame(input_frame, settings, window_out, last_report)) {
+          break;
+        }
       } catch (const std::exception& ex) {
         fail(ex.what());
         break;
       }
-      {
-        std::lock_guard<std::mutex> lock(metrics_mu);
-        ++metrics.frames_out;
-        ++window_out;
-        metrics.frames_dropped = mailbox.dropped();
-        metrics.last_process_ms = process_ms;
-        metrics.avg_process_ms = metrics.avg_process_ms == 0 ? process_ms : metrics.avg_process_ms * 0.9 + process_ms * 0.1;
-        metrics.vsr_quality = processor->quality();
-        metrics.vsr_state = processor->quality() < settings.quality_max ? "degraded" : "running";
-      }
-      const auto now = std::chrono::steady_clock::now();
-      if (settings.metrics_interval > 0 && now - last_report >= std::chrono::duration<double>(settings.metrics_interval)) {
-        const double seconds = std::chrono::duration<double>(now - last_report).count();
-        Metrics snapshot;
-        {
-          std::lock_guard<std::mutex> lock(metrics_mu);
-          metrics.fps = seconds > 0 ? static_cast<double>(window_out) / seconds : 0;
-          snapshot = metrics;
-        }
-        std::cerr << metrics_json(snapshot) << '\n';
-        if (!settings.metrics_file.empty() && !write_metrics_file(settings.metrics_file, snapshot)) {
-          std::cerr << "не вдалося записати файл метрик\n";
-        }
-        window_out = 0;
-        last_report = now;
-      }
     }
-    if (error.empty()) {
+    if (error.empty() && encoder != nullptr) {
       avcodec_send_frame(encoder, nullptr);
       try {
         running.store(true);
@@ -572,11 +804,17 @@ struct Session {
   }
 };
 
+struct SignalGuard {
+  ~SignalGuard() { g_running = nullptr; }
+};
+
 }  // namespace
 
 int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe) {
-  const Mode* input_mode = find_mode(modes, Direction::Input, settings.input.protocol, settings.input.role);
-  const Mode* output_mode = find_mode(modes, Direction::Output, settings.output.protocol, settings.output.role);
+  const Mode* input_mode = find_mode(modes, Direction::Input, settings.input.protocol, settings.input.role,
+                                     rtp_container(settings.input, Direction::Input));
+  const Mode* output_mode = find_mode(modes, Direction::Output, settings.output.protocol, settings.output.role,
+                                      rtp_container(settings.output, Direction::Output));
   if (input_mode == nullptr) {
     std::cerr << "вхідний режим недоступний у цій збірці: " << settings.input.protocol << " " << settings.input.role
               << '\n';
@@ -629,17 +867,43 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     std::cerr << "вихід: " << redact(output_built.public_url) << '\n';
     Session session(settings);
     g_running = &session.running;
+    SignalGuard guard;
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
-    std::signal(SIGPIPE, SIG_IGN);
+    ignore_pipe_signal();
     session.open_input(input_built, settings);
     session.open_decoder(settings);
-    session.open_processor_and_encoder(settings, output_built);
+    session.open_processor(settings);
+    AVFrame* first = session.pull_one_frame();
+    if (first == nullptr) {
+      std::cerr << session.error << '\n';
+      return 1;
+    }
+    try {
+      session.maybe_reduce_scale(first);
+    } catch (...) {
+      free_frame(first);
+      throw;
+    }
+    session.mailbox.publish(first);
     std::thread decoder([&session] { session.decode_loop(); });
-    std::thread processor([&session, &settings] { session.process_loop(settings); });
-    decoder.join();
-    processor.join();
-    g_running = nullptr;
+    std::thread worker;
+    try {
+      session.open_encoder(settings, output_built);
+      worker = std::thread([&session, &settings] { session.process_loop(settings); });
+      decoder.join();
+      worker.join();
+    } catch (...) {
+      session.running.store(false);
+      session.mailbox.close();
+      if (decoder.joinable()) {
+        decoder.join();
+      }
+      if (worker.joinable()) {
+        worker.join();
+      }
+      throw;
+    }
     std::lock_guard<std::mutex> lock(session.error_mu);
     if (!session.error.empty()) {
       std::cerr << session.error << '\n';

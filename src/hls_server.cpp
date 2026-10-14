@@ -1,14 +1,11 @@
 #include "hls_server.hpp"
 
+#include "platform.hpp"
+
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace rtx {
 namespace {
@@ -23,9 +20,9 @@ std::string content_type(const std::filesystem::path& path) {
   return "application/octet-stream";
 }
 
-bool send_all(int fd, const char* data, std::size_t size) {
+bool send_all(std::intptr_t fd, const char* data, std::size_t size) {
   while (size > 0) {
-    const ssize_t sent = ::send(fd, data, size, MSG_NOSIGNAL);
+    const long sent = socket_send(fd, data, size);
     if (sent <= 0) {
       return false;
     }
@@ -35,7 +32,7 @@ bool send_all(int fd, const char* data, std::size_t size) {
   return true;
 }
 
-void respond(int fd, int status, const std::string& type, const std::string& body) {
+void respond(std::intptr_t fd, int status, const std::string& type, const std::string& body) {
   std::ostringstream header;
   header << "HTTP/1.0 " << status << (status == 200 ? " OK" : " Not Found") << "\r\n";
   header << "Content-Type: " << type << "\r\n";
@@ -48,11 +45,11 @@ void respond(int fd, int status, const std::string& type, const std::string& bod
   send_all(fd, body.data(), body.size());
 }
 
-std::string request_path(int fd) {
+std::string request_path(std::intptr_t fd) {
   std::string data;
   char buffer[1024];
   while (data.find("\r\n") == std::string::npos && data.size() < 4096) {
-    const ssize_t got = ::recv(fd, buffer, sizeof(buffer), 0);
+    const long got = socket_recv(fd, buffer, sizeof(buffer));
     if (got <= 0) {
       return {};
     }
@@ -83,6 +80,7 @@ std::string request_path(int fd) {
 HlsServer::~HlsServer() { stop(); }
 
 bool HlsServer::start(const std::string& host, int port, const std::string& root, std::string& error) {
+  socket_startup();
   std::error_code fs_error;
   const auto canonical_root = std::filesystem::weakly_canonical(root, fs_error);
   if (fs_error || !std::filesystem::is_directory(canonical_root)) {
@@ -100,22 +98,21 @@ bool HlsServer::start(const std::string& host, int port, const std::string& root
     error = "не вдалося розв'язати адресу HLS-сервера";
     return false;
   }
-  int fd = -1;
+  std::intptr_t fd = -1;
   for (addrinfo* item = result; item != nullptr; item = item->ai_next) {
-    fd = ::socket(item->ai_family, item->ai_socktype, item->ai_protocol);
-    if (fd < 0) {
+    fd = socket_open(item->ai_family, item->ai_socktype, item->ai_protocol);
+    if (!socket_ok(fd)) {
       continue;
     }
-    const int reuse = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    if (bind(fd, item->ai_addr, item->ai_addrlen) == 0 && listen(fd, 8) == 0) {
+    socket_reuse(fd);
+    if (socket_bind(fd, item) == 0 && socket_listen(fd, 8) == 0) {
       break;
     }
-    close(fd);
+    socket_close(fd);
     fd = -1;
   }
   freeaddrinfo(result);
-  if (fd < 0) {
+  if (!socket_ok(fd)) {
     error = "не вдалося відкрити порт HLS-сервера";
     return false;
   }
@@ -127,9 +124,9 @@ bool HlsServer::start(const std::string& host, int port, const std::string& root
 
 void HlsServer::stop() {
   running_.store(false);
-  if (listen_fd_ >= 0) {
-    shutdown(listen_fd_, SHUT_RDWR);
-    close(listen_fd_);
+  if (socket_ok(listen_fd_)) {
+    socket_shutdown(listen_fd_);
+    socket_close(listen_fd_);
     listen_fd_ = -1;
   }
   if (thread_.joinable()) {
@@ -139,34 +136,35 @@ void HlsServer::stop() {
 
 void HlsServer::loop() {
   while (running_.load()) {
-    const int client = accept(listen_fd_, nullptr, nullptr);
-    if (client < 0) {
+    const std::intptr_t client = socket_accept(listen_fd_);
+    if (!socket_ok(client)) {
+      if (!running_.load()) {
+        break;
+      }
       continue;
     }
-    timeval timeout {};
-    timeout.tv_sec = 2;
-    setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    socket_timeouts(client, 2000, 2000);
     const std::string raw = request_path(client);
     if (raw.empty() || raw.find("..") != std::string::npos || raw.front() != '/') {
       respond(client, 404, "text/plain", "not found");
-      close(client);
+      socket_close(client);
       continue;
     }
     const std::filesystem::path file = std::filesystem::path(root_) / raw.substr(1);
     std::error_code error;
     const auto canonical = std::filesystem::weakly_canonical(file, error);
-    const std::string path_text = canonical.string();
-    const bool inside = path_text == root_ || path_text.rfind(root_ + "/", 0) == 0;
+    const auto relative = canonical.lexically_relative(std::filesystem::path(root_));
+    const bool inside = !error && !relative.empty() && *relative.begin() != "..";
     if (error || !inside || !std::filesystem::is_regular_file(canonical, error)) {
       respond(client, 404, "text/plain", "not found");
-      close(client);
+      socket_close(client);
       continue;
     }
     std::ifstream input(canonical, std::ios::binary);
     std::ostringstream body;
     body << input.rdbuf();
     respond(client, 200, content_type(canonical), body.str());
-    close(client);
+    socket_close(client);
   }
 }
 

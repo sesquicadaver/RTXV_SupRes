@@ -195,13 +195,24 @@ void add_rtp(std::vector<Mode>& modes) {
   if (has_protocol(Direction::Input, "rtp")) {
     modes.push_back(make_mode("rtp", Direction::Input, Role::Listener, "ffmpeg-protocol", "rtp", "mpegts",
                               {"local_port"}, {"local_host", "rtcp_port", "params"}, true,
-                              "RTP-прийом. RTCP-порт окремий, якщо заданий rtcp_port; інакше його обирає бібліотека."));
+                              "MPEG-TS over RTP: прийом транспортного потоку. Окремий RTCP — rtcp_port."));
   }
   if (has_protocol(Direction::Output, "rtp")) {
     modes.push_back(make_mode("rtp", Direction::Output, Role::Client, "ffmpeg-protocol", "rtp", "mpegts",
                               {"remote_host", "remote_port"},
                               {"local_host", "local_port", "rtcp_port", "params"}, true,
-                              "RTP до отримувача. local_port — локальний RTP, rtcp_port — окремий RTCP."));
+                              "MPEG-TS over RTP до отримувача. local_port — локальний RTP, rtcp_port — окремий RTCP."));
+  }
+  if (has_protocol(Direction::Input, "rtp") && library().demuxers.count("sdp") != 0) {
+    modes.push_back(make_mode("rtp", Direction::Input, Role::Client, "ffmpeg-demuxer", "sdp", "sdp", {"path"},
+                              {"params"}, false,
+                              "Елементарний RTP H.264/H.265 за файлом SDP. Це не MPEG-TS."));
+  }
+  if (has_protocol(Direction::Output, "rtp") && library().muxers.count("rtp") != 0) {
+    modes.push_back(make_mode(
+        "rtp", Direction::Output, Role::Client, "ffmpeg-muxer", "rtp", "rtp",
+        {"remote_host", "remote_port", "sdp"}, {"local_host", "local_port", "rtcp_port", "params"}, true,
+        "Елементарний RTP H.264/H.265. Після старту записується SDP; payload type береться з кодека."));
   }
 }
 
