@@ -1,0 +1,14 @@
+{
+  "windows_build_min": 22000,
+  "disk_bytes": 2147483648,
+  "vc_redist_build": 0,
+  "vc_file": "vc_redist.x64.exe",
+  "vc_sha256": "",
+  "min_driver": 0,
+  "supported_device_ids": [],
+  "driver_file": "",
+  "driver_url": "",
+  "driver_sha256": "",
+  "cuda_architectures": "",
+  "components": []
+}

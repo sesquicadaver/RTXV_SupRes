@@ -77,6 +77,7 @@ struct Settings {
   std::string gpu_uuid;
   bool pace_input = false;
   double warmup_s = 0;
+  bool status_events = true;
 };
 
 struct GpuInfo {

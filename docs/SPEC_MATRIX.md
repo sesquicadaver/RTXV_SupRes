@@ -34,3 +34,4 @@
 | HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
 | Одне вікно Qt: профіль, джерело, вихід, GPU, старт/стоп, згорнутий бенчмарк | `src/gui/` | `gui_self_check` з `QT_QPA_PLATFORM=offscreen`, якщо зібрано Qt 6 |
+| Реліз Windows 11 x64: Inno Setup, перевірка без CUDA, тест декодування→VSR→кодування→кадр | `packaging/rtx-vsr.iss`, `src/precheck_rules.cpp`, `src/install_check.cpp`, `CMakeLists.txt` | `tests/test_precheck.cpp`, `tests/test_install_check.cpp`; підписаний EXE і чиста Windows збираються на машині пакування |

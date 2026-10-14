@@ -1,0 +1,3 @@
+PLACEHOLDER
+SDK_VERSION=
+Файли NVIDIA runtime, які ліцензія цієї версії SDK дозволяє класти поруч із програмою:

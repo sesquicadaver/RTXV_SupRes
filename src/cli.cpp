@@ -2,6 +2,7 @@
 
 #include "catalog.hpp"
 #include "dependencies.hpp"
+#include "install_check.hpp"
 #include "pipeline.hpp"
 #include "profile.hpp"
 #include "report.hpp"
@@ -23,6 +24,8 @@ void print_help() {
 Команди:
   capabilities [--json]     лише режими, які є в цій збірці FFmpeg
   doctor [--json]          GPU, NVENC і чи зібрано RTX Video SDK
+  install-check --clip файл.h264 [--check-dir каталог]
+                           декодування, VSR, кодування і кадр на кожному GPU за UUID
   run [--profile файл]      проксі з окремими входом і виходом
 
 Вхід і вихід задаються незалежно. Роль визначає, чий це порт:
@@ -212,6 +215,8 @@ int cli_main(int argc, char** argv) {
   bool explicit_output = false;
   bool explicit_warmup = false;
   std::string profile_path;
+  std::string clip_path;
+  std::string check_dir;
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--json") {
@@ -346,6 +351,20 @@ int cli_main(int argc, char** argv) {
       settings.output_format = value;
       continue;
     }
+    if (arg == "--clip") {
+      if (!need(arg)) {
+        return 2;
+      }
+      clip_path = value;
+      continue;
+    }
+    if (arg == "--check-dir") {
+      if (!need(arg)) {
+        return 2;
+      }
+      check_dir = value;
+      continue;
+    }
     const auto input_flag = arg.rfind("--input-", 0);
     const auto output_flag = arg.rfind("--output-", 0);
     if (input_flag != 0 && output_flag != 0) {
@@ -444,6 +463,10 @@ int cli_main(int argc, char** argv) {
     std::cerr << "масштаб RTX VSR: 2 або 3\n";
     return 2;
   }
+  if (command != "install-check" && (!clip_path.empty() || !check_dir.empty())) {
+    std::cerr << "--clip і --check-dir лише для install-check\n";
+    return 2;
+  }
 
   const std::vector<Mode> modes = discover_modes();
   if (command == "capabilities") {
@@ -482,6 +505,9 @@ int cli_main(int argc, char** argv) {
     }
     std::cout << "ефект RTX VSR: створення перевірено\n";
     return 0;
+  }
+  if (command == "install-check") {
+    return run_install_check(clip_path, check_dir);
   }
   if (command != "run") {
     print_help();

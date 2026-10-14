@@ -23,7 +23,25 @@ ctest --test-dir build --output-on-failure
 
 Штатний шлях CI — MSYS2 UCRT64: `gcc`, `cmake`, `pkgconf`, `ffmpeg`. Сокети HLS, `process_id` і `SIGPIPE` мають окремі гілки для Win32; для MSVC без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
 
-Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x (Linux-образ 12.6 і Windows MSVC+nvcc). Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить.
+Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x (Linux-образ 12.6 і Windows MSVC+nvcc). Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить. Для релізного пакета цей прапорець заборонений.
+
+## Пакет Windows 11 x64
+
+Один інсталятор Inno Setup, не WiX. Збірка пакета:
+
+```bat
+cmake -S . -B build -DRTX_PRODUCT_BUILD=ON -DCMAKE_CUDA_ARCHITECTURES=75;86;89
+cmake --build build --config Release
+powershell -File packaging\stage_product.ps1 -BuildDir build\Release -FfmpegBin C:\ffmpeg\bin -CudaBin C:\cuda\bin -SdkBin C:\RTX_Video_SDK -VcRedist C:\redist\vc_redist.x64.exe
+```
+
+`RTX_PRODUCT_BUILD` завершується помилкою без Windows x64, MSVC, Qt 6 Widgets, справжнього RTX Video SDK, `nvsdk_ngx`, CUDA і явного списку архітектур. `RTX_CI_COMPILE_CHECK` разом із ним заборонений. `ISCC packaging\rtx-vsr.iss` збирає `packaging\output\rtx-vsr-setup.exe`; рядок `SignTool` у скрипті закоментований, доки немає сертифіката.
+
+Перед копіюванням файлів `rtx-vsr-precheck.exe` дивиться версію Windows, x64, місце на диску, запущені копії програми, адаптери NVIDIA через SetupAPI і версію `nvlddmkm.sys`. CUDA він не лінкує. VC++ Runtime x64 ставиться лише якщо збірка відсутня або старіша; новіша сумісна лишається. Сумісний драйвер не чіпається, і тоді мережа не потрібна. Невідомий або OEM-адаптер поза `supported_device_ids` дає повідомлення і не отримує приблизний драйвер. Завантажений або локальний драйвер і VC++ Runtime перевіряються підписом і SHA-256. Перезапуск відновлює інсталятор. Якщо коротка перевірка після копіювання не проходить, повертаються файли попередньої версії з `{commonappdata}\RTX VSR\previous`. Профілі в каталозі користувача не входять у каталог програми.
+
+`rtx-vsr-proxy install-check --clip install-check.h264` для кожного GPU за UUID декодує запис, проганяє VSR, кодує і перевіряє, що у виході є кадр. Це не вимір FPV-затримки. `doctor` лишається перевіркою залежностей; наявність `h264_nvenc` у FFmpeg його не замінює.
+
+У `packaging/components.json` перелік PCI device id (десяткові числа), `min_driver` (572.16 записується як 57216) і `vc_redist_build` заповнюються з приміток тієї версії SDK і офіційних пакетів. Порожні поля зупиняють `stage_product.ps1`. Повідомлення ліцензій — `packaging/NOTICES.txt`. FFmpeg лише динамічний LGPL, без `--enable-gpl` і `--enable-nonfree`. Кліп перевірки кодується `h264_nvenc` або передається готовим файлом, не `libx264`.
 
 ## Збірка з RTX Video SDK
 

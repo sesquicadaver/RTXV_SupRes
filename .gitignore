@@ -9,3 +9,5 @@ compile_commands.json
 *.pdb
 .vscode/
 .idea/
+packaging/dist/
+packaging/output/

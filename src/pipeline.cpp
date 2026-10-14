@@ -36,6 +36,9 @@ extern "C" {
 }
 
 namespace rtx {
+
+static bool g_emit_status = true;
+
 namespace {
 
 std::atomic<bool>* g_running = nullptr;
@@ -67,6 +70,9 @@ void throw_if(int status, const std::string& action) {
 std::mutex g_emit_mu;
 
 void emit_line(const std::string& line) {
+  if (!g_emit_status) {
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_emit_mu);
   std::cout << line << '\n';
   std::cout.flush();
@@ -957,6 +963,7 @@ std::string benchmark_event(const Metrics& metrics) {
 }  // namespace
 
 int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe) {
+  g_emit_status = settings.status_events;
   const std::string denied_input = password_access_error(settings.input.url, settings.input.params, {});
   if (!denied_input.empty()) {
     std::cerr << denied_input << '\n';
