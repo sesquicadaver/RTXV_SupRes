@@ -776,6 +776,7 @@ struct Session {
     set_frame_duration(output_frame);
     double process_ms = 0;
     bool ok = processor->process(input_frame, output_frame, process_ms);
+    const bool vsr_frame = ok && !processor->degraded();
     if (!ok) {
       std::cerr << "VSR: " << processor->last_error() << ", резервний масштаб\n";
       ok = processor->fallback(input_frame, output_frame);
@@ -867,6 +868,9 @@ struct Session {
         }
       } else {
         saw_bypass = false;
+      }
+      if (vsr_frame) {
+        ++metrics.vsr_frames;
       }
     }
     if (state != public_state) {
@@ -962,7 +966,7 @@ std::string benchmark_event(const Metrics& metrics) {
 
 }  // namespace
 
-int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe) {
+int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe, Metrics* summary) {
   g_emit_status = settings.status_events;
   const std::string denied_input = password_access_error(settings.input.url, settings.input.params, {});
   if (!denied_input.empty()) {
@@ -1034,6 +1038,15 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     std::cerr << "вхід: " << redact(input_built.public_url) << '\n';
     std::cerr << "вихід: " << redact(output_built.public_url) << '\n';
     Session session(resolved);
+    struct SummaryGuard {
+      Session& session;
+      Metrics* summary;
+      ~SummaryGuard() {
+        if (summary != nullptr) {
+          *summary = session.snapshot_metrics();
+        }
+      }
+    } summary_guard{session, summary};
     if (const GpuInfo* gpu = find_gpu(report.gpus, resolved.gpu)) {
       session.metrics.gpu_index = gpu->index;
       session.metrics.gpu_uuid = gpu->uuid;

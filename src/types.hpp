@@ -119,6 +119,7 @@ struct Metrics {
   std::uint64_t proxy_samples = 0;
   std::uint64_t overload_frames = 0;
   std::uint64_t bypass_entries = 0;
+  std::uint64_t vsr_frames = 0;
   int input_width = 0;
   int input_height = 0;
   int output_width = 0;

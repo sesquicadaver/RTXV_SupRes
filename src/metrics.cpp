@@ -49,6 +49,7 @@ std::string metrics_json(const Metrics& metrics) {
       << ",\"vsr_state\":\"" << escape_json(metrics.vsr_state) << "\",\"proxy_p95_ms\":" << metrics.proxy_p95_ms
       << ",\"proxy_p99_ms\":" << metrics.proxy_p99_ms << ",\"proxy_samples\":" << metrics.proxy_samples
       << ",\"overload_frames\":" << metrics.overload_frames << ",\"bypass_entries\":" << metrics.bypass_entries
+      << ",\"vsr_frames\":" << metrics.vsr_frames
       << ",\"input_width\":" << metrics.input_width << ",\"input_height\":" << metrics.input_height
       << ",\"output_width\":" << metrics.output_width << ",\"output_height\":" << metrics.output_height
       << ",\"gpu_index\":" << metrics.gpu_index << ",\"gpu_uuid\":\"" << escape_json(metrics.gpu_uuid)

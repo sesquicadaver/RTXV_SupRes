@@ -6,8 +6,29 @@
 
 namespace rtx {
 
-/// Номер драйвера NVIDIA з файлової версії nvlddmkm.sys: 32.0.15.7216 → 57216 (572.16).
+/// Номер драйвера NVIDIA з третього і четвертого полів файлової версії: 15.7216 → 57216 (572.16).
 int nvidia_driver_number(unsigned branch, unsigned build);
+
+/// Рядок DriverVersion з SetupAPI, наприклад 32.0.15.7216. Версія не-NVIDIA дає 0.
+int nvidia_driver_from_version_string(const std::string& text);
+
+/// ProviderName адаптера. «NVIDIA» і «NVIDIA …» підходять, базовий драйвер Microsoft — ні.
+bool nvidia_provider_name(const std::string& name);
+
+struct AdapterDriver {
+  std::uint32_t device_id = 0;
+  bool nvidia_provider = false;
+  int version = 0;
+};
+
+struct DriverPresence {
+  bool present = false;
+  int version = 0;
+};
+
+/// Драйвер є лише коли кожен знайдений адаптер NVIDIA має постачальника NVIDIA і розбірну версію.
+/// Номер — мінімум серед адаптерів. Шлях System32\drivers не використовується.
+DriverPresence summarize_display_drivers(const std::vector<AdapterDriver>& adapters);
 
 /// PCI DEV_ з рядка Hardware ID. Порожньо, якщо це не адаптер NVIDIA.
 bool nvidia_device_id(const std::string& hardware_id, std::uint32_t& device_id);

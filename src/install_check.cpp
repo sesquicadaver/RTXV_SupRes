@@ -30,8 +30,8 @@ std::string safe_component(const std::string& text) {
 
 }  // namespace
 
-bool install_sample_ok(int exit_code, const SampleView& view) {
-  return exit_code == 0 && view.frames > 0 && view.width > 0 && view.height > 0;
+bool install_sample_ok(int exit_code, const SampleView& view, std::uint64_t vsr_frames, std::uint64_t bypass_entries) {
+  return exit_code == 0 && view.frames > 0 && view.width > 0 && view.height > 0 && vsr_frames > 0 && bypass_entries == 0;
 }
 
 SampleView count_video_frames(const std::string& path, std::string& error) {
@@ -149,14 +149,19 @@ int run_install_check(const std::string& clip, const std::string& directory) {
       settings.metrics_interval = 0;
       settings.gpu = gpu.index;
       settings.gpu_uuid = gpu.uuid;
-      const int exit_code = run_proxy(settings, modes, ffmpeg_probe());
+      Metrics summary;
+      const int exit_code = run_proxy(settings, modes, ffmpeg_probe(), &summary);
       std::string frame_error;
       const SampleView view = exit_code == 0 ? count_video_frames(settings.output.path, frame_error) : SampleView{};
-      const bool ok = install_sample_ok(exit_code, view);
+      const bool ok = install_sample_ok(exit_code, view, summary.vsr_frames, summary.bypass_entries);
       if (!ok) {
         all_ok = false;
         if (failure.empty()) {
-          failure = frame_error.empty() ? "тест конвеєра не дав кадру" : frame_error;
+          if (view.frames > 0 && (summary.vsr_frames == 0 || summary.bypass_entries > 0)) {
+            failure = "VSR не підтверджено або сеанс пішов у bypass";
+          } else {
+            failure = frame_error.empty() ? "тест конвеєра не дав кадру" : frame_error;
+          }
         }
       }
       if (index != 0) {
@@ -164,6 +169,7 @@ int run_install_check(const std::string& clip, const std::string& directory) {
       }
       gpus << "{\"uuid\":\"" << json_escape(gpu.uuid) << "\",\"index\":" << gpu.index << ",\"exit_code\":" << exit_code
            << ",\"frames\":" << view.frames << ",\"width\":" << view.width << ",\"height\":" << view.height
+           << ",\"vsr_frames\":" << summary.vsr_frames << ",\"bypass_entries\":" << summary.bypass_entries
            << ",\"ok\":" << (ok ? "true" : "false") << ",\"error\":\"" << json_escape(frame_error) << "\"}";
     }
   }

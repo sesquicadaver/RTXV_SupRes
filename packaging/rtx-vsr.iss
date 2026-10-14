@@ -57,6 +57,14 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 Name: "desktopicon"; Description: "Ярлик на робочому столі"; GroupDescription: "Ярлики:"; Flags: unchecked
 
 [Code]
+var
+  BackupId: String;
+
+function InitializeSetup: Boolean;
+begin
+  Randomize;
+  Result := True;
+end;
 
 function DecodeJson(const Text: String): String;
 var
@@ -140,18 +148,26 @@ begin
     Result := Code = 0;
 end;
 
+function ReadAnsiFile(const Path: String): String;
+var
+  Raw: AnsiString;
+begin
+  Result := '';
+  if LoadStringFromFile(Path, Raw) then
+    Result := String(Raw);
+end;
+
 function CaptureHash(const Path: String): String;
 var
   Code: Integer;
-  Output: String;
 begin
   Result := '';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-NoProfile -Command "(Get-FileHash -Algorithm SHA256 -Path ''' + Path + ''').Hash.ToLowerInvariant() | Set-Content -NoNewline ''' + ExpandConstant('{tmp}\hash-only.txt') + '''"',
+      '-NoProfile -Command "$hash = (Get-FileHash -Algorithm SHA256 -Path ''' + Path + ''').Hash.ToLowerInvariant(); [IO.File]::WriteAllBytes(''' + ExpandConstant('{tmp}\hash-only.txt') + ''', [Text.Encoding]::ASCII.GetBytes($hash))"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) then
     Exit;
-  if (Code = 0) and LoadStringFromFile(ExpandConstant('{tmp}\hash-only.txt'), Output) then
-    Result := Lowercase(Trim(Output));
+  if Code = 0 then
+    Result := Lowercase(Trim(ReadAnsiFile(ExpandConstant('{tmp}\hash-only.txt'))));
 end;
 
 function CopyTree(const FromDir, ToDir: String): Boolean;
@@ -159,9 +175,38 @@ var
   Code: Integer;
 begin
   ForceDirectories(ToDir);
-  Exec(ExpandConstant('{cmd}'), '/C robocopy "' + FromDir + '" "' + ToDir + '" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1',
-    '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Code := 16;
+  if not Exec(ExpandConstant('{cmd}'), '/C robocopy "' + FromDir + '" "' + ToDir + '" /MIR /XF backup.id /NFL /NDL /NJH /NJS /NP /R:1 /W:1',
+    '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    Result := False;
+    Exit;
+  end;
   Result := Code < 8;
+end;
+
+function BackupPath: String;
+begin
+  Result := ExpandConstant('{commonappdata}\RTX VSR\backup-') + BackupId;
+end;
+
+function BackupMatches: Boolean;
+var
+  Raw: AnsiString;
+begin
+  Result := False;
+  if (BackupId = '') or (not FileExists(BackupPath + '\backup.id')) then Exit;
+  if not LoadStringFromFile(BackupPath + '\backup.id', Raw) then Exit;
+  Result := Trim(String(Raw)) = BackupId;
+end;
+
+function RequestRestart(var NeedsRestart: Boolean; const Phase: String): String;
+begin
+  RegWriteStringValue(HKLM, 'Software\RTX VSR', 'ResumePhase', Phase);
+  NeedsRestart := True;
+  { Порожній Result ігнорує NeedsRestart, і копіювання файлів пішло б до перезапуску.
+    Непорожній рядок зупиняє крок, Inno перезапускає комп'ютер і знову запускає цей setup. }
+  Result := 'потрібен перезапуск, щоб продовжити встановлення';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -177,7 +222,6 @@ begin
     Result := 'у пакеті немає модуля перевірки';
     Exit;
   end;
-  Report := '';
   if not Exec(ExpandConstant('{tmp}\rtx-vsr-precheck.exe'),
       '--manifest "' + ExpandConstant('{tmp}\components.json') + '" --out "' + ExpandConstant('{tmp}\precheck.json') + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -185,7 +229,8 @@ begin
     Result := 'модуль перевірки не запустився';
     Exit;
   end;
-  if not LoadStringFromFile(ExpandConstant('{tmp}\precheck.json'), Report) then
+  Report := ReadAnsiFile(ExpandConstant('{tmp}\precheck.json'));
+  if Report = '' then
   begin
     Result := 'немає результату перевірки';
     Exit;
@@ -226,7 +271,7 @@ begin
     end;
     if Code = 3010 then
     begin
-      NeedsRestart := True;
+      Result := RequestRestart(NeedsRestart, 'runtime');
       Exit;
     end;
   end;
@@ -277,48 +322,90 @@ begin
       Exit;
     end;
     if Code = 3010 then
-      NeedsRestart := True;
-  end;
-  if not NeedsRestart then
-  begin
-    if DirExists(ExpandConstant('{app}')) then
     begin
-      if not CopyTree(ExpandConstant('{app}'), ExpandConstant('{commonappdata}\RTX VSR\previous')) then
-        Result := 'не вдалося зберегти попередню версію';
+      Result := RequestRestart(NeedsRestart, 'driver');
+      Exit;
     end;
   end;
+  if DirExists(ExpandConstant('{app}')) then
+  begin
+    BackupId := GetDateTimeString('yyyymmddhhnnss', #0, #0) + '-' + IntToStr(Random(100000));
+    if not CopyTree(ExpandConstant('{app}'), BackupPath) then
+    begin
+      Result := 'не вдалося зберегти попередню версію';
+      Exit;
+    end;
+    if not SaveStringToFile(BackupPath + '\backup.id', BackupId, False) then
+    begin
+      Result := 'не вдалося позначити резервну копію';
+      Exit;
+    end;
+    RegWriteStringValue(HKLM, 'Software\RTX VSR', 'BackupId', BackupId);
+  end;
+  RegDeleteValue(HKLM, 'Software\RTX VSR', 'ResumePhase');
 end;
 
-procedure RestorePrevious;
+function RestorePrevious(var Detail: String): Boolean;
 var
-  Previous: String;
   Code: Integer;
 begin
-  Previous := ExpandConstant('{commonappdata}\RTX VSR\previous');
-  if DirExists(Previous) then
+  Result := False;
+  Detail := 'перевірку встановлення не пройдено';
+  RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'failed');
+  if BackupMatches then
   begin
-    CopyTree(Previous, ExpandConstant('{app}'));
-    MsgBox('Перевірку встановлення не пройдено. Повернуто попередні файли програми. Профілі не змінювались.', mbError, MB_OK);
-  end
-  else if FileExists(ExpandConstant('{uninstallexe}')) then
+    if CopyTree(BackupPath, ExpandConstant('{app}')) then
+    begin
+      RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'rolled-back');
+      Detail := 'перевірку встановлення не пройдено, файли цієї спроби повернуто, профілі не змінювались';
+      Result := True;
+    end
+    else
+      Detail := 'перевірку встановлення не пройдено, повернення файлів цієї спроби не вдалося';
+    Exit;
+  end;
+  if (BackupId <> '') then
   begin
-    Exec(ExpandConstant('{uninstallexe}'), '/VERYSILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
-    MsgBox('Перевірку встановлення не пройдено. Файли програми прибрано. VC++ Runtime і драйвер NVIDIA не чіпались.', mbError, MB_OK);
+    Detail := 'перевірку встановлення не пройдено, резервна копія не належить цій спробі';
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{uninstallexe}')) then
+  begin
+    Code := 1;
+    if Exec(ExpandConstant('{uninstallexe}'), '/VERYSILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+    begin
+      Detail := 'перевірку встановлення не пройдено, файли програми прибрано, VC++ Runtime і драйвер NVIDIA не чіпались';
+      Result := True;
+    end
+    else
+      Detail := 'перевірку встановлення не пройдено, прибрати щойно скопійовані файли не вдалося';
   end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Code: Integer;
-  Clip: String;
+  Clip, Detail: String;
 begin
   if CurStep <> ssPostInstall then Exit;
+  Code := 1;
   if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'doctor --json', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
   begin
-    RestorePrevious;
-    Exit;
+    RestorePrevious(Detail);
+    RaiseException(Detail);
   end;
   Clip := ExpandConstant('{app}\install-check.h264');
+  Code := 1;
   if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'install-check --clip "' + Clip + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-    RestorePrevious;
+  begin
+    RestorePrevious(Detail);
+    RaiseException(Detail);
+  end;
+  RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'ok');
+  if BackupId <> '' then
+  begin
+    DelTree(BackupPath, True, True, True);
+    RegDeleteValue(HKLM, 'Software\RTX VSR', 'BackupId');
+    BackupId := '';
+  end;
 end;

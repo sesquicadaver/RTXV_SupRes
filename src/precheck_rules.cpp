@@ -2,6 +2,7 @@
 
 #include "json_mini.hpp"
 
+#include <cctype>
 #include <cstdio>
 #include <sstream>
 
@@ -93,10 +94,76 @@ const char* driver_name(DriverChoice choice) {
 }  // namespace
 
 int nvidia_driver_number(unsigned branch, unsigned build) {
-  if (branch < 10 || build > 9999) {
+  if (branch < 10 || branch > 80 || build > 9999) {
     return 0;
   }
   return static_cast<int>((branch - 10) * 10000 + build);
+}
+
+int nvidia_driver_from_version_string(const std::string& text) {
+  unsigned parts[4] = {};
+  std::size_t index = 0;
+  for (int part = 0; part < 4; ++part) {
+    if (index >= text.size() || text[index] < '0' || text[index] > '9') {
+      return 0;
+    }
+    unsigned value = 0;
+    while (index < text.size() && text[index] >= '0' && text[index] <= '9') {
+      const unsigned digit = static_cast<unsigned>(text[index] - '0');
+      if (value > (0xffffffffu - digit) / 10) {
+        return 0;
+      }
+      value = value * 10 + digit;
+      ++index;
+    }
+    parts[part] = value;
+    if (part < 3) {
+      if (index >= text.size() || text[index] != '.') {
+        return 0;
+      }
+      ++index;
+    }
+  }
+  if (index != text.size()) {
+    return 0;
+  }
+  return nvidia_driver_number(parts[2], parts[3]);
+}
+
+bool nvidia_provider_name(const std::string& name) {
+  std::size_t begin = 0;
+  while (begin < name.size() && std::isspace(static_cast<unsigned char>(name[begin])) != 0) {
+    ++begin;
+  }
+  std::size_t end = name.size();
+  while (end > begin && std::isspace(static_cast<unsigned char>(name[end - 1])) != 0) {
+    --end;
+  }
+  std::string lower;
+  lower.reserve(end - begin);
+  for (std::size_t index = begin; index < end; ++index) {
+    lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(name[index]))));
+  }
+  return lower == "nvidia" || lower.rfind("nvidia ", 0) == 0;
+}
+
+DriverPresence summarize_display_drivers(const std::vector<AdapterDriver>& adapters) {
+  DriverPresence result;
+  if (adapters.empty()) {
+    return result;
+  }
+  int lowest = 0;
+  for (const AdapterDriver& adapter : adapters) {
+    if (!adapter.nvidia_provider || adapter.version <= 0) {
+      return DriverPresence{};
+    }
+    if (lowest == 0 || adapter.version < lowest) {
+      lowest = adapter.version;
+    }
+  }
+  result.present = true;
+  result.version = lowest;
+  return result;
 }
 
 bool nvidia_device_id(const std::string& hardware_id, std::uint32_t& device_id) {

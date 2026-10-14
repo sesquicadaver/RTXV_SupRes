@@ -10,8 +10,8 @@ struct SampleView {
   int height = 0;
 };
 
-/// Кадр після декодування виходу. Нуль кадрів або порожній розмір не підтверджує встановлення.
-bool install_sample_ok(int exit_code, const SampleView& view);
+/// Кадр після VSR. Вихід із кадром, але без підтверджених кадрів VSR або з переходом у bypass, не приймається.
+bool install_sample_ok(int exit_code, const SampleView& view, std::uint64_t vsr_frames, std::uint64_t bypass_entries);
 
 SampleView count_video_frames(const std::string& path, std::string& error);
 

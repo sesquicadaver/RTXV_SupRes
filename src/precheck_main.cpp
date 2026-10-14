@@ -85,19 +85,58 @@ void collect_runtime(HostFacts& host) {
   host.runtime_build = static_cast<int>(build);
 }
 
+void read_registry_text(HKEY key, const wchar_t* name, std::wstring& value) {
+  DWORD size = 0;
+  if (RegQueryValueExW(key, name, nullptr, nullptr, nullptr, &size) != ERROR_SUCCESS || size < sizeof(wchar_t)) {
+    return;
+  }
+  std::wstring buffer(size / sizeof(wchar_t), L'\0');
+  if (RegQueryValueExW(key, name, nullptr, nullptr, reinterpret_cast<LPBYTE>(buffer.data()), &size) != ERROR_SUCCESS) {
+    return;
+  }
+  if (!buffer.empty() && buffer.back() == L'\0') {
+    buffer.pop_back();
+  }
+  value = buffer;
+}
+
+void read_adapter_driver(HDEVINFO devices, SP_DEVINFO_DATA& info, AdapterDriver& adapter) {
+  wchar_t key_name[256] = {};
+  DWORD type = 0;
+  DWORD needed = 0;
+  if (!SetupDiGetDeviceRegistryPropertyW(devices, &info, SPDRP_DRIVER, &type, reinterpret_cast<PBYTE>(key_name),
+                                         sizeof(key_name), &needed) ||
+      key_name[0] == L'\0') {
+    return;
+  }
+  const std::wstring path = L"SYSTEM\\CurrentControlSet\\Control\\Class\\" + std::wstring(key_name);
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
+    return;
+  }
+  std::wstring provider;
+  std::wstring version;
+  read_registry_text(key, L"ProviderName", provider);
+  read_registry_text(key, L"DriverVersion", version);
+  RegCloseKey(key);
+  adapter.nvidia_provider = nvidia_provider_name(narrow(provider));
+  adapter.version = nvidia_driver_from_version_string(narrow(version));
+}
+
 void collect_devices(HostFacts& host) {
   HDEVINFO devices = SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT);
   if (devices == INVALID_HANDLE_VALUE) {
     return;
   }
+  std::vector<AdapterDriver> adapters;
   SP_DEVINFO_DATA info{};
   info.cbSize = sizeof(info);
   for (DWORD index = 0; SetupDiEnumDeviceInfo(devices, index, &info); ++index) {
     wchar_t buffer[1024] = {};
     DWORD type = 0;
     DWORD needed = 0;
-    if (!SetupDiGetDeviceRegistryPropertyW(devices, &info, SPDRP_HARDWAREID, &type,
-                                           reinterpret_cast<PBYTE>(buffer), sizeof(buffer), &needed)) {
+    if (!SetupDiGetDeviceRegistryPropertyW(devices, &info, SPDRP_HARDWAREID, &type, reinterpret_cast<PBYTE>(buffer),
+                                           sizeof(buffer), &needed)) {
       continue;
     }
     const wchar_t* cursor = buffer;
@@ -105,37 +144,20 @@ void collect_devices(HostFacts& host) {
       const std::wstring item(cursor);
       std::uint32_t device_id = 0;
       if (nvidia_device_id(narrow(item), device_id)) {
+        AdapterDriver adapter;
+        adapter.device_id = device_id;
+        read_adapter_driver(devices, info, adapter);
+        adapters.push_back(adapter);
         host.nvidia_device_ids.push_back(device_id);
+        break;
       }
       cursor += item.size() + 1;
     }
   }
   SetupDiDestroyDeviceInfoList(devices);
-}
-
-void collect_driver(HostFacts& host) {
-  wchar_t system[MAX_PATH] = {};
-  if (GetSystemDirectoryW(system, MAX_PATH) == 0) {
-    return;
-  }
-  const std::wstring path = std::wstring(system) + L"\\drivers\\nvlddmkm.sys";
-  DWORD handle = 0;
-  const DWORD bytes = GetFileVersionInfoSizeW(path.c_str(), &handle);
-  if (bytes == 0) {
-    return;
-  }
-  std::vector<unsigned char> block(bytes);
-  if (!GetFileVersionInfoW(path.c_str(), 0, bytes, block.data())) {
-    return;
-  }
-  VS_FIXEDFILEINFO* info = nullptr;
-  UINT length = 0;
-  if (!VerQueryValueW(block.data(), L"\\", reinterpret_cast<void**>(&info), &length) || info == nullptr) {
-    return;
-  }
-  host.driver_present = true;
-  host.driver_version =
-      nvidia_driver_number(HIWORD(info->dwFileVersionLS), LOWORD(info->dwFileVersionLS));
+  const DriverPresence presence = summarize_display_drivers(adapters);
+  host.driver_present = presence.present;
+  host.driver_version = presence.version;
 }
 
 void collect_processes(HostFacts& host) {
@@ -167,7 +189,6 @@ HostFacts collect_host() {
   collect_disk(host);
   collect_runtime(host);
   collect_devices(host);
-  collect_driver(host);
   collect_processes(host);
   return host;
 }

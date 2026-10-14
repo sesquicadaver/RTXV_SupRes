@@ -33,7 +33,10 @@ function Assert-Signed([string]$Path) {
 
 $markerPath = Join-Path $BuildDir "rtx-product-build.txt"
 if (-not (Test-Path $markerPath)) {
-  Fail "немає rtx-product-build.txt. Збірка має бути RTX_PRODUCT_BUILD=ON"
+  $markerPath = Join-Path (Split-Path -Parent $BuildDir) "rtx-product-build.txt"
+}
+if (-not (Test-Path $markerPath)) {
+  Fail "немає rtx-product-build.txt. Збірка має бути RTX_PRODUCT_BUILD=ON, -BuildDir — каталог CMake"
 }
 $marker = Get-Content -Path $markerPath
 if ($marker -notcontains "product=1" -or $marker -notcontains "compile_check=0") {
@@ -44,8 +47,8 @@ $architectures = ""
 if ($archLine) {
   $architectures = $archLine.Substring("cuda_architectures=".Length).Trim()
 }
-if ($architectures -eq "" -or $architectures -eq "native") {
-  Fail "реліз не зафіксував CMAKE_CUDA_ARCHITECTURES"
+if ($architectures -eq "" -or $architectures -eq "native" -or $architectures -eq "OFF") {
+  Fail "реліз не зафіксував явний список CMAKE_CUDA_ARCHITECTURES"
 }
 
 $template = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot "components.json") | ConvertFrom-Json
@@ -115,12 +118,22 @@ Copy-Item $VcRedist (Join-Path $Dist "vc_redist.x64.exe") -Force
 $vcHash = Hash-File (Join-Path $Dist "vc_redist.x64.exe")
 
 $driverFile = ""
-$driverHash = ""
+$driverUrl = ([string]$template.driver_url).Trim()
+$driverHash = ([string]$template.driver_sha256).Trim().ToLowerInvariant()
 if ($NvidiaDriver -ne "") {
   Assert-Signed $NvidiaDriver
   Copy-Item $NvidiaDriver (Join-Path $Dist "nvidia-driver.exe") -Force
   $driverFile = "nvidia-driver.exe"
   $driverHash = Hash-File (Join-Path $Dist "nvidia-driver.exe")
+} elseif ($driverUrl -ne "" -or $driverHash -ne "") {
+  if ($driverUrl -eq "" -or $driverHash -eq "") {
+    Fail "онлайн-драйвер потребує driver_url і driver_sha256 разом"
+  }
+  if ($driverUrl -notmatch '^https://') {
+    Fail "driver_url має бути https"
+  }
+} else {
+  $driverHash = ""
 }
 
 $clip = Join-Path $Dist "install-check.h264"
@@ -158,7 +171,7 @@ $components = $lines -join ",`n"
   "min_driver": $([int]$template.min_driver),
   "supported_device_ids": [$deviceText],
   "driver_file": "$driverFile",
-  "driver_url": "$($template.driver_url)",
+  "driver_url": "$driverUrl",
   "driver_sha256": "$driverHash",
   "cuda_architectures": "$architectures",
   "components": [

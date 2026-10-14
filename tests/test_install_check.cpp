@@ -101,15 +101,17 @@ bool write_one_frame(const std::string& path) {
 
 int main() {
   rtx::SampleView empty;
-  CHECK(!rtx::install_sample_ok(0, empty));
+  CHECK(!rtx::install_sample_ok(0, empty, 1, 0));
   rtx::SampleView frame;
   frame.frames = 1;
   frame.width = 64;
   frame.height = 64;
-  CHECK(rtx::install_sample_ok(0, frame));
-  CHECK(!rtx::install_sample_ok(1, frame));
+  CHECK(rtx::install_sample_ok(0, frame, 1, 0));
+  CHECK(!rtx::install_sample_ok(0, frame, 0, 0));
+  CHECK(!rtx::install_sample_ok(0, frame, 1, 1));
+  CHECK(!rtx::install_sample_ok(1, frame, 1, 0));
   frame.width = 0;
-  CHECK(!rtx::install_sample_ok(0, frame));
+  CHECK(!rtx::install_sample_ok(0, frame, 1, 0));
 
   const std::filesystem::path path = std::filesystem::temp_directory_path() / "rtx-vsr-install-check-frame.ts";
   CHECK(write_one_frame(path.string()));

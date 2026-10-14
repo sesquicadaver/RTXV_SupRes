@@ -34,6 +34,29 @@ int main() {
   CHECK(rtx::nvidia_driver_number(15, 7216) == 57216);
   CHECK(rtx::nvidia_driver_number(15, 6094) == 56094);
   CHECK(rtx::nvidia_driver_number(9, 100) == 0);
+  CHECK(rtx::nvidia_driver_number(22621, 1) == 0);
+  CHECK(rtx::nvidia_driver_from_version_string("32.0.15.7216") == 57216);
+  CHECK(rtx::nvidia_driver_from_version_string("32.0.15.6094") == 56094);
+  CHECK(rtx::nvidia_driver_from_version_string("10.0.22621.3672") == 0);
+  CHECK(rtx::nvidia_provider_name("NVIDIA"));
+  CHECK(rtx::nvidia_provider_name("NVIDIA Corporation"));
+  CHECK(!rtx::nvidia_provider_name("Microsoft"));
+
+  rtx::AdapterDriver newer;
+  newer.device_id = 0x2684;
+  newer.nvidia_provider = true;
+  newer.version = 57216;
+  rtx::AdapterDriver older = newer;
+  older.device_id = 0x2204;
+  older.version = 56094;
+  const rtx::DriverPresence both = rtx::summarize_display_drivers({newer, older});
+  CHECK(both.present);
+  CHECK(both.version == 56094);
+  older.nvidia_provider = false;
+  older.version = 0;
+  const rtx::DriverPresence missing = rtx::summarize_display_drivers({newer, older});
+  CHECK(!missing.present);
+  CHECK(missing.version == 0);
 
   std::uint32_t device = 0;
   CHECK(rtx::nvidia_device_id("PCI\\VEN_10DE&DEV_2684&SUBSYS_0000", device));
