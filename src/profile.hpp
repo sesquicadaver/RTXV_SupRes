@@ -67,8 +67,10 @@ bool load_profile_file(const std::filesystem::path& path, Profile& profile, std:
 // Пароль і секретні параметри URL ідуть у SecretStore. У JSON лишається адреса без них.
 bool seal_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id, SecretStore& store,
                        std::string& error);
+// Новий secret_id отримує власну копію секрету, а не спільний kept_credential.
+// Порожній kept_url замінює секрети URL вмістом raw_url. Інакше незмінна адреса зберігає
+// пароль і секретні параметри зі сховища; ключ із порожнім значенням видаляє саме його.
 // drop_owned видаляє kept_credential лише коли перезаписується профіль, який ним володіє.
-// Підготовка іншого файлу (сеанс, «Зберегти як») передає false і не чіпає чужий секрет.
 bool commit_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id,
                          const std::string& kept_url, const std::string& kept_credential, bool drop_owned,
                          SecretStore& store, std::string& error);

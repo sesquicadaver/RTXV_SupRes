@@ -24,4 +24,7 @@ const Mode* find_mode(const std::vector<Mode>& modes, Direction direction, const
 std::string port_caption(Direction direction, Role role);
 std::string consumer_address(const Endpoint& endpoint);
 
+// Порожній payload і mpegts — MPEG-TS over RTP. h264, hevc і es — елементарний потік.
+std::string rtp_container(const Endpoint& endpoint, Direction direction);
+
 }  // namespace rtx

@@ -162,12 +162,16 @@ Window::~Window() {
   for (QProcess* process : processes) {
     process->disconnect(this);
   }
+  ++proxy_token_;
+  ++bench_token_;
   stop_process(proxy_);
   stop_process(bench_);
 }
 
 void Window::closeEvent(QCloseEvent* event) {
   bench_abort_ = true;
+  ++proxy_token_;
+  ++bench_token_;
   stop_process(proxy_);
   stop_process(bench_);
   QMainWindow::closeEvent(event);
@@ -188,6 +192,46 @@ void Window::stop_process(QProcess* process) {
   }
   process->kill();
   process->waitForFinished(1000);
+}
+
+void Window::request_stop(QProcess* process, quint64 token, quint64* epoch) {
+  if (process == nullptr || epoch == nullptr || process->state() == QProcess::NotRunning) {
+    return;
+  }
+  process->write("stop\n");
+  QTimer::singleShot(3000, this, [this, process, token, epoch] {
+    if (*epoch != token || process->state() == QProcess::NotRunning) {
+      return;
+    }
+    process->terminate();
+    QTimer::singleShot(1000, this, [this, process, token, epoch] {
+      if (*epoch != token || process->state() == QProcess::NotRunning) {
+        return;
+      }
+      process->kill();
+    });
+  });
+}
+
+void Window::apply_input_rtp_payload(rtx::Profile& profile) const {
+  if (profile.input.protocol != "rtp") {
+    return;
+  }
+  QString container;
+  for (const QJsonValue& value : modes_) {
+    const QJsonObject mode = value.toObject();
+    if (mode.value("direction").toString() == "input" &&
+        mode.value("protocol").toString().toStdString() == profile.input.protocol &&
+        mode.value("role").toString().toStdString() == profile.input.role) {
+      container = mode.value("container").toString();
+      break;
+    }
+  }
+  if (container == "sdp" || (container.isEmpty() && profile.input.role == "client")) {
+    profile.input.payload = "es";
+    return;
+  }
+  profile.input.payload = "mpegts";
 }
 
 Window::Window(QWidget* parent) : QMainWindow(parent) {
@@ -237,9 +281,7 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     bench_abort_ = true;
     bench_wait_reason_ = "немає споживача";
     status_->setText("Очікування споживача вичерпано");
-    if (bench_->state() != QProcess::NotRunning) {
-      bench_->write("stop\n");
-    }
+    request_stop(bench_, bench_token_, &bench_token_);
   });
   reload_modes();
   reload_gpus();
@@ -925,6 +967,7 @@ rtx::Profile Window::profile_from_form() const {
       read_params_line(input_params_->text(), profile.input.params);
     }
   }
+  apply_input_rtp_payload(profile);
   if (profile.input.url == loaded_url_.toStdString()) {
     profile.input.credential_id = loaded_credential_.toStdString();
   }
@@ -954,8 +997,15 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
   }
   bitrate_->setText(profile.bitrate > 0 ? QString::number(profile.bitrate) : QString());
   if (!profile.input.url.empty() || !visible_url.isEmpty()) {
-    source_url_->setChecked(true);
     url_->setText(visible_url);
+    source_url_->blockSignals(true);
+    source_url_->setChecked(true);
+    source_url_->blockSignals(false);
+    fill_roles();
+    const int role = input_role_->findData(QString::fromStdString(profile.input.role));
+    if (role >= 0) {
+      input_role_->setCurrentIndex(role);
+    }
   } else {
     source_fields_->setChecked(true);
     const int protocol = input_protocol_->findData(QString::fromStdString(profile.input.protocol));
@@ -1019,16 +1069,16 @@ bool Window::write_profile(const QString& path, QString& error, bool remember) {
     error = QString::fromStdString(failure);
     return false;
   }
-  if (drop_owned && source_url_->isChecked()) {
-    loaded_credential_ = QString::fromStdString(profile.input.credential_id);
-    loaded_url_ = QString::fromStdString(profile.input.url);
-    url_->setText(loaded_url_);
-  }
   if (!rtx::save_profile_file(path.toStdString(), profile, failure)) {
     error = QString::fromStdString(failure);
     return false;
   }
   if (remember) {
+    if (source_url_->isChecked()) {
+      loaded_url_ = QString::fromStdString(profile.input.url);
+      url_->setText(loaded_url_);
+    }
+    loaded_credential_ = QString::fromStdString(profile.input.credential_id);
     profile_path_ = path;
     saved_fingerprint_ = QString::fromStdString(rtx::profile_json(profile_from_form()));
     mark_dirty();
@@ -1103,6 +1153,7 @@ void Window::start_proxy() {
   gpu_->setEnabled(false);
   refresh_gpu_->setEnabled(false);
   bench_run_->setEnabled(false);
+  ++proxy_token_;
   proxy_->start(proxy_program(), {"run", "--profile", path});
 }
 
@@ -1112,13 +1163,8 @@ void Window::stop_proxy() {
     start_->setText("Запустити");
     return;
   }
-  proxy_->write("stop\n");
   status_->setText("Зупинено");
-  QTimer::singleShot(3000, this, [this] {
-    if (proxy_->state() != QProcess::NotRunning) {
-      proxy_->terminate();
-    }
-  });
+  request_stop(proxy_, proxy_token_, &proxy_token_);
 }
 
 void Window::read_proxy() {
@@ -1246,6 +1292,7 @@ void Window::run_next_benchmark() {
   bench_stdout_.clear();
   bench_settled_ = false;
   bench_wait_timer_->stop();
+  ++bench_token_;
   bench_->start(proxy_program(), args);
 }
 
@@ -1254,7 +1301,7 @@ void Window::cancel_benchmark() {
   bench_wait_reason_ = "скасовано";
   bench_wait_timer_->stop();
   if (bench_->state() != QProcess::NotRunning) {
-    bench_->write("stop\n");
+    request_stop(bench_, bench_token_, &bench_token_);
     return;
   }
   bench_index_ = bench_queue_.size();
@@ -1348,12 +1395,16 @@ void Window::finish_benchmark() {
   saved.insert("quality", job.quality);
   saved.insert("gpu_name", job.gpu_name);
   saved.insert("gpu_uuid", job.gpu_uuid);
+  const bool finished_ok =
+      bench_->exitStatus() == QProcess::NormalExit && bench_->exitCode() == 0 && result.value("ok").toBool();
+  const auto samples = static_cast<std::uint64_t>(result.value("proxy_samples").toDouble());
+  bool applicable = false;
   if (bench_abort_) {
     put(3, bench_wait_reason_.isEmpty() ? QString("скасовано") : bench_wait_reason_);
     saved.insert("error", bench_wait_reason_);
     bench_index_ = bench_queue_.size();
     bench_abort_ = false;
-  } else if (result.isEmpty()) {
+  } else if (!finished_ok) {
     const QString reason = QString::fromUtf8(bench_->readAllStandardError()).trimmed();
     put(3, bench_->exitCode() == 3 ? "непридатний" : "помилка");
     put(4, reason.left(80));
@@ -1368,7 +1419,7 @@ void Window::finish_benchmark() {
     const double dropped = result.value("frames_dropped").toDouble();
     const double incoming = std::max(1.0, result.value("frames_in").toDouble());
     const double p95 = result.value("proxy_p95_ms").toDouble();
-    const auto samples = static_cast<std::uint64_t>(result.value("proxy_samples").toDouble());
+    applicable = rtx::benchmark_run_valid(0, true, samples);
     const bool within = rtx::measurement_within_budget(samples, p95, bench_budget_->value());
     put(3, QString::number(result.value("fps").toDouble(), 'f', 1));
     put(4, QString::number(100.0 * dropped / incoming, 'f', 1) + "%");
@@ -1397,6 +1448,10 @@ void Window::finish_benchmark() {
     saved.insert("vsr_quality", result.value("vsr_quality"));
     ++bench_index_;
   }
+  saved.insert("valid", applicable);
+  if (auto* head = bench_table_->item(row, 0)) {
+    head->setData(Qt::UserRole + 3, applicable);
+  }
   bench_card_.append(saved);
   bench_progress_->setValue(std::min(bench_index_, static_cast<int>(bench_queue_.size())));
   run_next_benchmark();
@@ -1405,6 +1460,10 @@ void Window::finish_benchmark() {
 void Window::apply_benchmark_row() {
   const int row = bench_table_->currentRow();
   if (row < 0 || bench_table_->item(row, 0) == nullptr) {
+    return;
+  }
+  if (!bench_table_->item(row, 0)->data(Qt::UserRole + 3).toBool()) {
+    status_->setText("Цей рядок не є успішним виміром");
     return;
   }
   const int scale = bench_table_->item(row, 0)->data(Qt::UserRole).toInt();

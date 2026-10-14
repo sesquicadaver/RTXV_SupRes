@@ -540,6 +540,17 @@ std::string port_caption(Direction direction, Role role) {
   return "порт";
 }
 
+std::string rtp_container(const Endpoint& endpoint, Direction direction) {
+  if (endpoint.protocol != "rtp") {
+    return {};
+  }
+  const bool elementary = endpoint.payload == "h264" || endpoint.payload == "hevc" || endpoint.payload == "es";
+  if (!elementary) {
+    return direction == Direction::Input ? "rtp" : "rtp_mpegts";
+  }
+  return direction == Direction::Input ? "sdp" : "rtp";
+}
+
 std::string consumer_address(const Endpoint& endpoint) {
   if (endpoint.protocol == "hls" && endpoint.role == "server") {
     const std::string host = endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host;

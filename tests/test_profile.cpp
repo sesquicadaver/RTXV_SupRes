@@ -82,6 +82,40 @@ int main() {
   CHECK(srt_loaded.input.url.find("passphrase=hunter2") != std::string::npos);
   CHECK(srt_loaded.input.url.find("mode=caller") != std::string::npos);
 
+  const std::string sealed = profile.input.url;
+  rtx::Profile copy;
+  CHECK(rtx::commit_input_secret(copy, sealed, "profile/copy", sealed, "profile/fpv", false, store, error));
+  CHECK(copy.input.credential_id == "profile/copy");
+  CHECK(store.secrets["profile/copy"] == "secret");
+  CHECK(store.secrets["profile/fpv"] == "secret");
+  rtx::Profile replaced = copy;
+  CHECK(rtx::commit_input_secret(replaced, "rtsp://10.0.0.9/live", "profile/copy", sealed, "profile/copy", true, store,
+                                error));
+  CHECK(replaced.input.credential_id.empty());
+  CHECK(store.secrets.count("profile/copy") == 0);
+  CHECK(store.secrets["profile/fpv"] == "secret");
+
+  rtx::Profile merged;
+  merged.output.params.emplace_back("passphrase", "xyz");
+  CHECK(rtx::commit_input_secret(merged, sealed, "profile/fpv", sealed, "profile/fpv", true, store, error));
+  rtx::Profile merged_loaded;
+  CHECK(rtx::parse_profile(rtx::profile_json(merged), merged_loaded, error));
+  CHECK(merged_loaded.output.params.empty());
+  CHECK(rtx::open_input_secret(merged_loaded, store, error));
+  CHECK(merged_loaded.input.url == "rtsp://user:secret@192.168.1.20:554/live");
+  CHECK(merged_loaded.output.params.size() == 1);
+  CHECK(merged_loaded.output.params[0].first == "passphrase");
+  CHECK(merged_loaded.output.params[0].second == "xyz");
+  rtx::Profile cleared;
+  cleared.output.params.emplace_back("passphrase", "");
+  CHECK(rtx::commit_input_secret(cleared, sealed, "profile/fpv", sealed, "profile/fpv", true, store, error));
+  rtx::Profile cleared_loaded;
+  CHECK(rtx::parse_profile(rtx::profile_json(cleared), cleared_loaded, error));
+  CHECK(rtx::open_input_secret(cleared_loaded, store, error));
+  CHECK(cleared_loaded.input.url == "rtsp://user:secret@192.168.1.20:554/live");
+  CHECK(cleared_loaded.output.params.empty());
+  CHECK(store.secrets["profile/fpv"] == "secret");
+
   rtx::Profile fields;
   fields.output.protocol = "rtp";
   fields.output.role = "client";
@@ -179,5 +213,35 @@ int main() {
   CHECK(!rtx::measurement_within_budget(0, 0, 33));
   CHECK(rtx::measurement_within_budget(8, 20, 33));
   CHECK(!rtx::measurement_within_budget(8, 40, 33));
+  CHECK(rtx::benchmark_run_valid(0, true, 8));
+  CHECK(!rtx::benchmark_run_valid(1, true, 8));
+  CHECK(!rtx::benchmark_run_valid(0, false, 8));
+  CHECK(!rtx::benchmark_run_valid(0, true, 0));
+
+  rtx::Endpoint elementary;
+  elementary.protocol = "rtp";
+  elementary.role = "client";
+  elementary.payload = "es";
+  elementary.path = "in.sdp";
+  rtx::Endpoint mpegts_rtp = elementary;
+  mpegts_rtp.payload.clear();
+  mpegts_rtp.role = "listener";
+  CHECK(rtx::rtp_container(elementary, rtx::Direction::Input) == "sdp");
+  CHECK(rtx::rtp_container(mpegts_rtp, rtx::Direction::Input) == "rtp");
+  std::vector<rtx::Mode> rtp_modes(2);
+  rtp_modes[0].protocol = "rtp";
+  rtp_modes[0].direction = rtx::Direction::Input;
+  rtp_modes[0].role = rtx::Role::Client;
+  rtp_modes[0].container = "sdp";
+  rtp_modes[1].protocol = "rtp";
+  rtp_modes[1].direction = rtx::Direction::Input;
+  rtp_modes[1].role = rtx::Role::Listener;
+  rtp_modes[1].container = "rtp";
+  CHECK(rtx::find_mode(rtp_modes, rtx::Direction::Input, "rtp", "client",
+                       rtx::rtp_container(elementary, rtx::Direction::Input)) != nullptr);
+  CHECK(rtx::find_mode(rtp_modes, rtx::Direction::Input, "rtp", "client",
+                       rtx::rtp_container(mpegts_rtp, rtx::Direction::Input)) == nullptr);
+  CHECK(rtx::find_mode(rtp_modes, rtx::Direction::Input, "rtp", "listener",
+                       rtx::rtp_container(mpegts_rtp, rtx::Direction::Input)) != nullptr);
   return rtx_test::result();
 }

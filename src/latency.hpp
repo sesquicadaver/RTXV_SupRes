@@ -23,6 +23,11 @@ inline bool measurement_within_budget(std::uint64_t samples, double p95_ms, doub
   return samples > 0 && p95_ms <= budget_ms;
 }
 
+// Успішний прогін бенчмарку: процес завершився нулем, подія позначена ok, є кадри після прогріву.
+inline bool benchmark_run_valid(int exit_code, bool event_ok, std::uint64_t samples) {
+  return exit_code == 0 && event_ok && samples > 0;
+}
+
 // Час обробки проксі по кожному кадру. Кільце фіксованого розміру тримає піки
 // останнього вікна, не згладжене середнє.
 class ProxyLatency {

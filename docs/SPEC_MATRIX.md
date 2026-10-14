@@ -27,7 +27,9 @@
 | Профіль JSON схеми 1, атомарний запис, пароль лише в сховищі ОС | `src/profile.cpp`, `src/secrets.cpp` | `tests/test_profile.cpp` |
 | `doctor --json`; події стану й метрики на stdout; `stop` на stdin | `src/report.cpp`, `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_profile.cpp`; `doctor --json` без SDK завершується кодом 3 |
 | Обраний GPU є в списку за індексом; перевірка списку окремо від створення SDK | `src/report.cpp`, `src/processor_factory.cpp` | `tests/test_profile.cpp` (`gpu_list_blocker`) |
-| Секрет URL і `passphrase` поза JSON; чужий профіль не втрачає секрет | `src/profile.cpp` | `tests/test_profile.cpp` |
+| Секрет URL і `passphrase` поза JSON; «Зберегти як» копіює секрет, новий параметр не стирає старий | `src/profile.cpp` | `tests/test_profile.cpp` |
+| Елементарний RTP-вхід шукає режим SDP, MPEG-TS — демуксер `rtp` | `src/endpoint.cpp` | `tests/test_profile.cpp` (`rtp_container`) |
+| Валідний бенчмарк: код 0, `ok` і хоча б один кадр | `src/latency.hpp`, `src/pipeline.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp` (`benchmark_run_valid`) |
 | Час черги без паузи `--pace`; нуль зразків не входить у бюджет | `src/latency.hpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
 | HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |

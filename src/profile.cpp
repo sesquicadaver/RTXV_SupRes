@@ -2,6 +2,7 @@
 
 #include "json_mini.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -175,6 +176,50 @@ std::string append_query(std::string url, const std::vector<std::pair<std::strin
   return url;
 }
 
+struct SecretParts {
+  std::string password;
+  std::vector<std::pair<std::string, std::string>> query;
+  std::vector<std::pair<std::string, std::string>> input_params;
+  std::vector<std::pair<std::string, std::string>> output_params;
+
+  bool any() const { return !password.empty() || !query.empty() || !input_params.empty() || !output_params.empty(); }
+};
+
+bool decode_secret_blob(const std::string& blob, SecretParts& parts, std::string& error) {
+  parts = {};
+  if (blob.empty() || blob.front() != '{') {
+    parts.password = blob;
+    error.clear();
+    return true;
+  }
+  Json json;
+  if (!parse_json(blob, json, error)) {
+    return false;
+  }
+  parts.password = json.text_or("password", {});
+  restore_param_object(json.find("query"), parts.query);
+  restore_param_object(json.find("input_params"), parts.input_params);
+  restore_param_object(json.find("output_params"), parts.output_params);
+  error.clear();
+  return true;
+}
+
+void overlay_secret_params(std::vector<std::pair<std::string, std::string>>& base,
+                           const std::vector<std::pair<std::string, std::string>>& incoming) {
+  for (const auto& item : incoming) {
+    base.erase(std::remove_if(base.begin(), base.end(),
+                              [&](const std::pair<std::string, std::string>& kept) { return kept.first == item.first; }),
+               base.end());
+    if (!item.second.empty()) {
+      base.push_back(item);
+    }
+  }
+}
+
+std::string sealed_url(const UrlSecret& parts) {
+  return parts.user.empty() ? parts.url : join_url_secret(parts.url, parts.user, {});
+}
+
 bool atomic_write(const std::filesystem::path& path, const std::string& body, std::string& error) {
   const std::filesystem::path temporary = path.string() + ".tmp";
   {
@@ -341,15 +386,40 @@ bool commit_input_secret(Profile& profile, const std::string& raw_url, const std
   const auto input_secrets = take_secret_params(profile.input.params);
   const auto output_secrets = take_secret_params(profile.output.params);
   const UrlSecret parts = split_url_secret(raw_url);
-  const bool material = parts.has_secret() || !input_secrets.empty() || !output_secrets.empty();
-  if (!material) {
-    if (raw_url == kept_url && !owned_credential.empty()) {
-      profile.input.url = kept_url;
-      profile.input.credential_id = owned_credential;
-      error.clear();
-      return true;
+  const std::string visible = sealed_url(parts);
+  const bool same_address = !kept_url.empty() && visible == kept_url;
+
+  SecretParts stored;
+  if (!owned_credential.empty()) {
+    std::string blob;
+    if (!store.load(owned_credential, blob, error) || !decode_secret_blob(blob, stored, error)) {
+      return false;
     }
-    profile.input.url = parts.url;
+  }
+
+  SecretParts merged;
+  if (parts.has_password) {
+    merged.password = parts.password;
+  } else if (same_address) {
+    merged.password = stored.password;
+  }
+  if (same_address) {
+    merged.query = stored.query;
+    overlay_secret_params(merged.query, parts.query_secrets);
+  } else {
+    for (const auto& item : parts.query_secrets) {
+      if (!item.second.empty()) {
+        merged.query.push_back(item);
+      }
+    }
+  }
+  merged.input_params = stored.input_params;
+  merged.output_params = stored.output_params;
+  overlay_secret_params(merged.input_params, input_secrets);
+  overlay_secret_params(merged.output_params, output_secrets);
+
+  profile.input.url = visible;
+  if (!merged.any()) {
     profile.input.credential_id.clear();
     if (drop_owned && !owned_credential.empty()) {
       store.remove(owned_credential, error);
@@ -361,11 +431,11 @@ bool commit_input_secret(Profile& profile, const std::string& raw_url, const std
     error = "немає ідентифікатора для сховища облікових даних";
     return false;
   }
-  const std::string blob = encode_secret_blob(parts.password, parts.query_secrets, input_secrets, output_secrets);
+  const std::string blob =
+      encode_secret_blob(merged.password, merged.query, merged.input_params, merged.output_params);
   if (!store.save(secret_id, blob, error)) {
     return false;
   }
-  profile.input.url = parts.user.empty() ? parts.url : join_url_secret(parts.url, parts.user, {});
   profile.input.credential_id = secret_id;
   if (drop_owned && !owned_credential.empty() && owned_credential != secret_id) {
     store.remove(owned_credential, error);
@@ -383,24 +453,14 @@ bool open_input_secret(Profile& profile, SecretStore& store, std::string& error)
   if (!store.load(profile.input.credential_id, blob, error)) {
     return false;
   }
-  std::string password = blob;
-  std::vector<std::pair<std::string, std::string>> query;
-  std::vector<std::pair<std::string, std::string>> input_params;
-  std::vector<std::pair<std::string, std::string>> output_params;
-  if (!blob.empty() && blob.front() == '{') {
-    Json json;
-    if (!parse_json(blob, json, error)) {
-      return false;
-    }
-    password = json.text_or("password", {});
-    restore_param_object(json.find("query"), query);
-    restore_param_object(json.find("input_params"), input_params);
-    restore_param_object(json.find("output_params"), output_params);
+  SecretParts parts;
+  if (!decode_secret_blob(blob, parts, error)) {
+    return false;
   }
-  const UrlSecret parts = split_url_secret(profile.input.url);
-  profile.input.url = append_query(join_url_secret(parts.url, parts.user, password), query);
-  profile.input.params.insert(profile.input.params.end(), input_params.begin(), input_params.end());
-  profile.output.params.insert(profile.output.params.end(), output_params.begin(), output_params.end());
+  const UrlSecret url = split_url_secret(profile.input.url);
+  profile.input.url = append_query(join_url_secret(url.url, url.user, parts.password), parts.query);
+  profile.input.params.insert(profile.input.params.end(), parts.input_params.begin(), parts.input_params.end());
+  profile.output.params.insert(profile.output.params.end(), parts.output_params.begin(), parts.output_params.end());
   error.clear();
   return true;
 }

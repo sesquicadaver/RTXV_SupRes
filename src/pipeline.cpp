@@ -189,17 +189,6 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
   return {};
 }
 
-std::string rtp_container(const Endpoint& endpoint, Direction direction) {
-  if (endpoint.protocol != "rtp") {
-    return {};
-  }
-  const bool elementary = endpoint.payload == "h264" || endpoint.payload == "hevc" || endpoint.payload == "es";
-  if (!elementary) {
-    return direction == Direction::Input ? "rtp" : "rtp_mpegts";
-  }
-  return direction == Direction::Input ? "sdp" : "rtp";
-}
-
 void prepare_hls(BuiltEndpoint& output, HlsServer& server) {
   namespace fs = std::filesystem;
   if (output.serve_root.empty()) {
@@ -958,7 +947,8 @@ std::string benchmark_event(const Metrics& metrics) {
     body.replace(pos, from.size(), "\"type\":\"benchmark\"");
   }
   const char* version = av_version_info();
-  body.insert(body.size() - 1, std::string(",\"ffmpeg\":\"") + json_escape(version == nullptr ? "" : version) + "\"");
+  body.insert(body.size() - 1,
+              std::string(",\"ok\":true,\"ffmpeg\":\"") + json_escape(version == nullptr ? "" : version) + "\"");
   return body;
 }
 
@@ -1074,13 +1064,15 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
       throw;
     }
     session.publish_metrics();
+    {
+      std::lock_guard<std::mutex> lock(session.error_mu);
+      if (!session.error.empty()) {
+        std::cerr << session.error << '\n';
+        return 1;
+      }
+    }
     if (resolved.pace_input) {
       emit_line(benchmark_event(session.snapshot_metrics()));
-    }
-    std::lock_guard<std::mutex> lock(session.error_mu);
-    if (!session.error.empty()) {
-      std::cerr << session.error << '\n';
-      return 1;
     }
     emit_line(status_event("stopped", {}));
     return 0;

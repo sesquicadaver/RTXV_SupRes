@@ -68,6 +68,8 @@ class Window : public QMainWindow {
   void cancel_benchmark();
   void read_benchmark();
   void stop_process(QProcess* process);
+  void request_stop(QProcess* process, quint64 token, quint64* epoch);
+  void apply_input_rtp_payload(rtx::Profile& profile) const;
   QString proxy_program() const;
   QString secret_id(const QString& path) const;
 
@@ -149,6 +151,8 @@ class Window : public QMainWindow {
   bool running_ = false;
   bool bench_abort_ = false;
   bool bench_settled_ = false;
+  quint64 proxy_token_ = 0;
+  quint64 bench_token_ = 0;
   QList<BenchJob> bench_queue_;
   int bench_index_ = 0;
   QString bench_profile_;
