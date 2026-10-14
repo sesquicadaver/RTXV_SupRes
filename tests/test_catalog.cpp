@@ -14,6 +14,11 @@ int main() {
     CHECK(mode.protocol != "gopher");
     CHECK(mode.protocol != "crypto");
     CHECK(mode.protocol != "md5");
+    CHECK(mode.protocol != "ftp");
+    CHECK(mode.protocol != "sftp");
+    CHECK(mode.protocol != "smb");
+    CHECK(mode.protocol != "libsmbclient");
+    CHECK(mode.protocol != "icecast");
   }
   CHECK(has(rtx::Direction::Input, "udp", "listener"));
   CHECK(has(rtx::Direction::Output, "udp", "client"));

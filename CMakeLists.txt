@@ -49,7 +49,6 @@ add_library(rtx_core STATIC
   src/cli.cpp
   src/latency.cpp
   src/json_mini.cpp
-  src/secrets.cpp
   src/profile.cpp
   src/report.cpp
 )
@@ -65,7 +64,7 @@ else()
 endif()
 if(WIN32)
   target_compile_definitions(rtx_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(rtx_core PUBLIC ws2_32 advapi32)
+  target_link_libraries(rtx_core PUBLIC ws2_32)
 endif()
 
 set(RTX_VIDEO_SDK_ROOT "$ENV{RTX_VIDEO_SDK_ROOT}" CACHE PATH "Корінь NVIDIA RTX Video SDK")

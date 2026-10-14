@@ -7,114 +7,40 @@
 
 #include <chrono>
 #include <filesystem>
-#include <map>
-
-namespace {
-
-class MemoryStore final : public rtx::SecretStore {
- public:
-  bool save(const std::string& id, const std::string& secret, std::string& error) override {
-    secrets[id] = secret;
-    error.clear();
-    return true;
-  }
-  bool load(const std::string& id, std::string& secret, std::string& error) override {
-    const auto found = secrets.find(id);
-    if (found == secrets.end()) {
-      error = "немає";
-      return false;
-    }
-    secret = found->second;
-    error.clear();
-    return true;
-  }
-  bool remove(const std::string& id, std::string& error) override {
-    secrets.erase(id);
-    error.clear();
-    return true;
-  }
-  std::map<std::string, std::string> secrets;
-};
-
-}  // namespace
 
 int main() {
   const rtx::UrlSecret parts = rtx::split_url_secret("rtsp://user:secret@192.168.1.20:554/live");
+  CHECK(parts.has_userinfo);
   CHECK(parts.has_password);
   CHECK(parts.user == "user");
-  CHECK(parts.password == "secret");
   CHECK(parts.url == "rtsp://192.168.1.20:554/live");
-  CHECK(rtx::join_url_secret(parts.url, parts.user, parts.password) == "rtsp://user:secret@192.168.1.20:554/live");
+  const rtx::UrlSecret named = rtx::split_url_secret("rtsp://user@192.168.1.20:554/live");
+  CHECK(named.has_userinfo);
+  CHECK(!named.has_password);
+  CHECK(named.user == "user");
+  CHECK(rtx::password_access_error("rtsp://192.168.1.20:554/live", {}, {}).empty());
+  CHECK(rtx::password_access_error("rtsp://user@192.168.1.20:554/live", {}, {}).find("адресу і порт") !=
+        std::string::npos);
+  CHECK(rtx::password_access_error("rtsp://user:secret@192.168.1.20:554/live", {}, {}).find("адресу і порт") !=
+        std::string::npos);
+  CHECK(rtx::password_access_error("srt://10.0.0.1:9000?passphrase=hunter2&mode=caller", {}, {}).find("адресу і порт") !=
+        std::string::npos);
+  std::vector<std::pair<std::string, std::string>> params{{"passphrase", "xyz"}};
+  CHECK(rtx::password_access_error("srt://10.0.0.1:9000?mode=caller", params, {}).find("адресу і порт") !=
+        std::string::npos);
+  CHECK(rtx::password_access_error("srt://10.0.0.1:9000?mode=caller", {}, "profile/old").find("адресу і порт") !=
+        std::string::npos);
 
   rtx::Profile profile;
   profile.name = "FPV";
   profile.input.protocol = "rtsp";
   profile.input.role = "client";
-  MemoryStore store;
+  profile.input.url = "rtsp://192.168.1.20:554/live";
   std::string error;
-  CHECK(rtx::seal_input_secret(profile, "rtsp://user:secret@192.168.1.20:554/live", "profile/fpv", store, error));
-  const std::string json = rtx::profile_json(profile);
-  CHECK(json.find("secret") == std::string::npos);
-  CHECK(json.find("credential_id") != std::string::npos);
-  CHECK(store.secrets["profile/fpv"] == "secret");
-  rtx::Profile loaded;
-  CHECK(rtx::parse_profile(json, loaded, error));
-  CHECK(rtx::open_input_secret(loaded, store, error));
-  CHECK(loaded.input.url == "rtsp://user:secret@192.168.1.20:554/live");
-
-  rtx::Profile other = loaded;
-  other.input.url = "rtsp://user@192.168.1.20:554/live";
-  other.input.credential_id = "profile/fpv";
-  CHECK(rtx::commit_input_secret(other, "rtsp://10.0.0.8/live", "profile/session", loaded.input.url, "profile/fpv", false,
-                                store, error));
-  CHECK(other.input.credential_id.empty());
-  CHECK(store.secrets.count("profile/fpv") == 1);
-  CHECK(store.secrets["profile/fpv"] == "secret");
-
-  rtx::Profile srt;
-  CHECK(rtx::seal_input_secret(srt, "srt://10.0.0.1:9000?passphrase=hunter2&mode=caller", "profile/srt", store, error));
-  const std::string srt_json = rtx::profile_json(srt);
-  CHECK(srt_json.find("hunter2") == std::string::npos);
-  CHECK(srt.input.url.find("mode=caller") != std::string::npos);
-  rtx::Profile srt_loaded;
-  CHECK(rtx::parse_profile(srt_json, srt_loaded, error));
-  CHECK(rtx::open_input_secret(srt_loaded, store, error));
-  CHECK(srt_loaded.input.url.find("passphrase=hunter2") != std::string::npos);
-  CHECK(srt_loaded.input.url.find("mode=caller") != std::string::npos);
-
-  const std::string sealed = profile.input.url;
-  rtx::Profile copy;
-  CHECK(rtx::commit_input_secret(copy, sealed, "profile/copy", sealed, "profile/fpv", false, store, error));
-  CHECK(copy.input.credential_id == "profile/copy");
-  CHECK(store.secrets["profile/copy"] == "secret");
-  CHECK(store.secrets["profile/fpv"] == "secret");
-  rtx::Profile replaced = copy;
-  CHECK(rtx::commit_input_secret(replaced, "rtsp://10.0.0.9/live", "profile/copy", sealed, "profile/copy", true, store,
-                                error));
-  CHECK(replaced.input.credential_id.empty());
-  CHECK(store.secrets.count("profile/copy") == 0);
-  CHECK(store.secrets["profile/fpv"] == "secret");
-
-  rtx::Profile merged;
-  merged.output.params.emplace_back("passphrase", "xyz");
-  CHECK(rtx::commit_input_secret(merged, sealed, "profile/fpv", sealed, "profile/fpv", true, store, error));
-  rtx::Profile merged_loaded;
-  CHECK(rtx::parse_profile(rtx::profile_json(merged), merged_loaded, error));
-  CHECK(merged_loaded.output.params.empty());
-  CHECK(rtx::open_input_secret(merged_loaded, store, error));
-  CHECK(merged_loaded.input.url == "rtsp://user:secret@192.168.1.20:554/live");
-  CHECK(merged_loaded.output.params.size() == 1);
-  CHECK(merged_loaded.output.params[0].first == "passphrase");
-  CHECK(merged_loaded.output.params[0].second == "xyz");
-  rtx::Profile cleared;
-  cleared.output.params.emplace_back("passphrase", "");
-  CHECK(rtx::commit_input_secret(cleared, sealed, "profile/fpv", sealed, "profile/fpv", true, store, error));
-  rtx::Profile cleared_loaded;
-  CHECK(rtx::parse_profile(rtx::profile_json(cleared), cleared_loaded, error));
-  CHECK(rtx::open_input_secret(cleared_loaded, store, error));
-  CHECK(cleared_loaded.input.url == "rtsp://user:secret@192.168.1.20:554/live");
-  CHECK(cleared_loaded.output.params.empty());
-  CHECK(store.secrets["profile/fpv"] == "secret");
+  CHECK(rtx::password_access_error(profile).empty());
+  profile.input.url = "rtsp://user@192.168.1.20:554/live";
+  CHECK(rtx::password_access_error(profile).find("адресу і порт") != std::string::npos);
+  profile.input.url = "rtsp://192.168.1.20:554/live";
 
   rtx::Profile fields;
   fields.output.protocol = "rtp";

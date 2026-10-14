@@ -71,7 +71,6 @@ class Window : public QMainWindow {
   void request_stop(QProcess* process, quint64 token, quint64* epoch);
   void apply_input_rtp_payload(rtx::Profile& profile) const;
   QString proxy_program() const;
-  QString secret_id(const QString& path) const;
 
   QComboBox* profiles_ = nullptr;
   QPushButton* save_ = nullptr;
@@ -144,7 +143,6 @@ class Window : public QMainWindow {
   QString profile_path_;
   QString saved_fingerprint_;
   QString loaded_url_;
-  QString loaded_credential_;
   QString unresolved_gpu_;
   QByteArray bench_stdout_;
   QString bench_wait_reason_;

@@ -4,7 +4,6 @@
 #include "latency.hpp"
 
 #include <algorithm>
-#include <memory>
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -581,8 +580,6 @@ QString Window::proxy_program() const {
   return QFileInfo::exists(beside) ? beside : QString("rtx-vsr-proxy");
 }
 
-QString Window::secret_id(const QString& path) const { return "profile/" + path; }
-
 void Window::reload_modes() {
   auto* process = new QProcess(this);
   connect(process, &QProcess::finished, this, [this, process](int, QProcess::ExitStatus) {
@@ -968,9 +965,6 @@ rtx::Profile Window::profile_from_form() const {
     }
   }
   apply_input_rtp_payload(profile);
-  if (profile.input.url == loaded_url_.toStdString()) {
-    profile.input.credential_id = loaded_credential_.toStdString();
-  }
   return profile;
 }
 
@@ -1060,12 +1054,8 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
 
 bool Window::write_profile(const QString& path, QString& error, bool remember) {
   rtx::Profile profile = profile_from_form();
-  const std::unique_ptr<rtx::SecretStore> store = rtx::system_secret_store();
-  std::string failure;
-  const bool drop_owned = remember && path == profile_path_;
-  const std::string raw_url = source_url_->isChecked() ? url_->text().trimmed().toStdString() : profile.input.url;
-  if (!rtx::commit_input_secret(profile, raw_url, secret_id(path).toStdString(), loaded_url_.toStdString(),
-                               loaded_credential_.toStdString(), drop_owned, *store, failure)) {
+  std::string failure = rtx::password_access_error(profile);
+  if (!failure.empty()) {
     error = QString::fromStdString(failure);
     return false;
   }
@@ -1078,7 +1068,6 @@ bool Window::write_profile(const QString& path, QString& error, bool remember) {
       loaded_url_ = QString::fromStdString(profile.input.url);
       url_->setText(loaded_url_);
     }
-    loaded_credential_ = QString::fromStdString(profile.input.credential_id);
     profile_path_ = path;
     saved_fingerprint_ = QString::fromStdString(rtx::profile_json(profile_from_form()));
     mark_dirty();
@@ -1094,7 +1083,10 @@ void Window::load_profile(const QString& path) {
     status_->setText(QString::fromStdString(error));
     return;
   }
-  loaded_credential_ = QString::fromStdString(profile.input.credential_id);
+  if (const std::string denied = rtx::password_access_error(profile); !denied.empty()) {
+    status_->setText(QString::fromStdString(denied));
+    return;
+  }
   loaded_url_ = QString::fromStdString(profile.input.url);
   form_from_profile(profile, loaded_url_);
   profile_path_ = path;

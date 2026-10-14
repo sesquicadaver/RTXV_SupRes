@@ -46,7 +46,7 @@ RTP: --input-payload і --output-payload mpegts (типово), h264, hevc аб�
 
 Якість за замовчуванням адаптивна, старт з рівня 2. Масштаб 2 або 3.
 Якщо масштаб 3 не вкладається в інтервал першого кадру, до відкриття виходу він падає до 2.
-Профіль схеми 1: --profile файл.json. Пароль джерела в JSON не пишеться.
+Профіль схеми 1: --profile файл.json. Лише адреса і порт, без імені користувача і пароля.
 Карта: --gpu-uuid або --gpu N. Порівняння запису: --pace і --warmup секунди; явне --quality вимикає адаптацію.
 Події стану й метрики — рядки JSON на stdout. Журнал FFmpeg лишається на stderr.
 Команда зупинки на stdin: stop
@@ -376,9 +376,8 @@ int cli_main(int argc, char** argv) {
       std::cerr << error << '\n';
       return 2;
     }
-    const std::unique_ptr<SecretStore> store = system_secret_store();
-    if (!open_input_secret(profile, *store, error)) {
-      std::cerr << error << '\n';
+    if (const std::string denied = password_access_error(profile); !denied.empty()) {
+      std::cerr << denied << '\n';
       return 2;
     }
     Settings loaded;

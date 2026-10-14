@@ -1,5 +1,7 @@
 #include "pipeline.hpp"
 
+#include "profile.hpp"
+
 #include "adaptive.hpp"
 #include "color.hpp"
 #include "dependencies.hpp"
@@ -955,6 +957,16 @@ std::string benchmark_event(const Metrics& metrics) {
 }  // namespace
 
 int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe) {
+  const std::string denied_input = password_access_error(settings.input.url, settings.input.params, {});
+  if (!denied_input.empty()) {
+    std::cerr << denied_input << '\n';
+    return 2;
+  }
+  const std::string denied_output = password_access_error(settings.output.url, settings.output.params, {});
+  if (!denied_output.empty()) {
+    std::cerr << denied_output << '\n';
+    return 2;
+  }
   const Mode* input_mode = find_mode(modes, Direction::Input, settings.input.protocol, settings.input.role,
                                      rtp_container(settings.input, Direction::Input));
   const Mode* output_mode = find_mode(modes, Direction::Output, settings.output.protocol, settings.output.role,

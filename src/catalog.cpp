@@ -370,6 +370,11 @@ std::string join_csv(const std::vector<std::string>& values) {
   return out.str();
 }
 
+bool authorization_required(const std::string& protocol) {
+  return protocol == "ftp" || protocol == "sftp" || protocol == "smb" || protocol == "libsmbclient" ||
+         protocol == "icecast";
+}
+
 }  // namespace
 
 std::vector<Mode> discover_modes() {
@@ -390,6 +395,9 @@ std::vector<Mode> discover_modes() {
   add_pull_client(modes, "mmst");
   add_rtsp(modes);
   add_hls(modes);
+  modes.erase(std::remove_if(modes.begin(), modes.end(),
+                             [](const Mode& mode) { return authorization_required(mode.protocol); }),
+              modes.end());
   std::sort(modes.begin(), modes.end(), [](const Mode& left, const Mode& right) {
     if (left.direction != right.direction) {
       return left.direction == Direction::Input;
