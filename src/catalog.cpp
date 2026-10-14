@@ -192,16 +192,17 @@ void add_srt(std::vector<Mode>& modes) {
 }
 
 void add_rtp(std::vector<Mode>& modes) {
-  if (has_protocol(Direction::Input, "rtp")) {
-    modes.push_back(make_mode("rtp", Direction::Input, Role::Listener, "ffmpeg-protocol", "rtp", "mpegts",
-                              {"local_port"}, {"local_host", "rtcp_port", "params"}, true,
-                              "MPEG-TS over RTP: прийом транспортного потоку. Окремий RTCP — rtcp_port."));
+  if (has_protocol(Direction::Input, "rtp") && library().demuxers.count("rtp") != 0) {
+    modes.push_back(make_mode(
+        "rtp", Direction::Input, Role::Listener, "ffmpeg-demuxer", "rtp", "rtp", {"local_port"},
+        {"local_host", "rtcp_port", "params"}, true,
+        "MPEG-TS over RTP: демуксер rtp знімає заголовок RTP (payload type 33). Окремий RTCP — rtcp_port."));
   }
-  if (has_protocol(Direction::Output, "rtp")) {
-    modes.push_back(make_mode("rtp", Direction::Output, Role::Client, "ffmpeg-protocol", "rtp", "mpegts",
-                              {"remote_host", "remote_port"},
-                              {"local_host", "local_port", "rtcp_port", "params"}, true,
-                              "MPEG-TS over RTP до отримувача. local_port — локальний RTP, rtcp_port — окремий RTCP."));
+  if (has_protocol(Direction::Output, "rtp") && library().muxers.count("rtp_mpegts") != 0) {
+    modes.push_back(make_mode(
+        "rtp", Direction::Output, Role::Client, "ffmpeg-muxer", "rtp_mpegts", "rtp_mpegts",
+        {"remote_host", "remote_port"}, {"local_host", "local_port", "rtcp_port", "params"}, true,
+        "MPEG-TS over RTP: муксер rtp_mpegts додає заголовки RTP (payload type 33). Протокол rtp:// сам їх не додає."));
   }
   if (has_protocol(Direction::Input, "rtp") && library().demuxers.count("sdp") != 0) {
     modes.push_back(make_mode("rtp", Direction::Input, Role::Client, "ffmpeg-demuxer", "sdp", "sdp", {"path"},

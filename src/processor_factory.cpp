@@ -26,7 +26,11 @@ DependencyReport inspect_dependencies() {
   report.gpus = probe_cuda_devices(report.cuda_note);
   report.nvenc_h264 = avcodec_find_encoder_by_name("h264_nvenc") != nullptr;
   report.nvenc_hevc = avcodec_find_encoder_by_name("hevc_nvenc") != nullptr;
-#if defined(RTX_WITH_SDK)
+#if defined(RTX_SDK_COMPILE_CHECK)
+  report.sdk_built = false;
+  report.sdk_note =
+      "зібрано перевірку компіляції CUDA без NVIDIA RTX Video SDK; ефект VSR цим бінарником не підтверджено";
+#elif defined(RTX_WITH_SDK)
   report.sdk_built = true;
   report.sdk_note = "RTX Video SDK зібрано в бінарник";
 #else

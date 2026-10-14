@@ -144,6 +144,15 @@ inline long socket_send(std::intptr_t fd, const char* data, std::size_t size) {
 #endif
 }
 
+inline long socket_recvfrom(std::intptr_t fd, char* data, std::size_t size) {
+  const int chunk = static_cast<int>(size > 65535 ? 65535 : size);
+#if defined(_WIN32)
+  return ::recvfrom(static_cast<SOCKET>(fd), data, chunk, 0, nullptr, nullptr);
+#else
+  return ::recvfrom(static_cast<int>(fd), data, static_cast<std::size_t>(chunk), 0, nullptr, nullptr);
+#endif
+}
+
 inline long socket_recv(std::intptr_t fd, char* data, std::size_t size) {
   const int chunk = static_cast<int>(size > 1048576 ? 1048576 : size);
 #if defined(_WIN32)

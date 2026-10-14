@@ -39,6 +39,7 @@ void print_help() {
     --output-protocol srt --output-role listener --output-local-port 9000
 
 RTP: --input-payload і --output-payload mpegts (типово), h264, hevc або es.
+Типовий MPEG-TS over RTP пише муксер rtp_mpegts (payload type 33) і читає демуксер rtp.
 Елементарний вихід пише SDP у --output-sdp. Елементарний вхід читає --input-path файл.sdp.
 
 Якість за замовчуванням адаптивна, старт з рівня 2. Масштаб 2 або 3.

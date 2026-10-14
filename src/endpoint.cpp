@@ -296,7 +296,16 @@ const Mode* find_mode(const std::vector<Mode>& modes, Direction direction, const
       }
       continue;
     }
-    if (found == nullptr || (mode.container == "mpegts" && found->container != "mpegts")) {
+    const auto preference = [](const std::string& name) {
+      if (name == "rtp_mpegts") {
+        return 2;
+      }
+      if (name == "mpegts") {
+        return 1;
+      }
+      return 0;
+    };
+    if (found == nullptr || preference(mode.container) > preference(found->container)) {
       found = &mode;
     }
   }

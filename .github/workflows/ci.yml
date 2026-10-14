@@ -17,7 +17,7 @@ jobs:
           cmake --build build -j"$(nproc)"
           ctest --test-dir build --output-on-failure
           ./build/rtx-vsr-proxy capabilities --json > /tmp/modes.json
-          python3 -c 'import json; d=json.load(open("/tmp/modes.json")); assert d["modes"]; assert all(m["protocol"]!="gopher" for m in d["modes"]); rtp=[m for m in d["modes"] if m["protocol"]=="rtp" and m["direction"]=="output"]; assert {m["container"] for m in rtp}=={"mpegts","rtp"}'
+          python3 -c 'import json; d=json.load(open("/tmp/modes.json")); assert d["modes"]; assert all(m["protocol"]!="gopher" for m in d["modes"]); rtp=[m for m in d["modes"] if m["protocol"]=="rtp" and m["direction"]=="output"]; assert {m["container"] for m in rtp}=={"rtp_mpegts","rtp"}'
 
   windows:
     runs-on: windows-latest
@@ -39,3 +39,52 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
           ctest --test-dir build --output-on-failure
+
+  cuda-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and link the CUDA translation unit without a GPU
+        run: |
+          docker run --rm -v "$PWD":/src -w /src nvidia/cuda:12.6.3-devel-ubuntu22.04 bash -lc '
+            apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y cmake pkg-config g++ libavformat-dev libavcodec-dev libavutil-dev
+            cmake -S . -B build-cuda -DCMAKE_BUILD_TYPE=Release -DRTX_CI_COMPILE_CHECK=ON
+            cmake --build build-cuda -j"$(nproc)"
+            stub=/usr/local/cuda/lib64/stubs
+            if [ ! -e "$stub/libcuda.so.1" ]; then ln -s "$stub/libcuda.so" "$stub/libcuda.so.1"; fi
+            export LD_LIBRARY_PATH="$stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            ctest --test-dir build-cuda --output-on-failure
+            set +e
+            ./build-cuda/rtx-vsr-proxy doctor > /tmp/doctor.txt
+            code=$?
+            set -e
+            cat /tmp/doctor.txt
+            test "$code" -eq 3
+            grep -q "не підтверджено" /tmp/doctor.txt
+          '
+
+  windows-cuda:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: Jimver/cuda-toolkit@v0.2.25
+        with:
+          cuda: "12.6.3"
+          method: network
+      - name: Install FFmpeg for MSVC
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install ffmpeg:x64-windows pkgconf:x64-windows
+          echo "FFMPEG_ROOT=$env:RUNNER_TEMP\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+          echo "$env:RUNNER_TEMP\vcpkg\installed\x64-windows\tools\pkgconf" >> $env:GITHUB_PATH
+      - name: Compile and link with nvcc and MSVC
+        shell: pwsh
+        run: |
+          $env:PKG_CONFIG_PATH = "$env:FFMPEG_ROOT\lib\pkgconfig"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DRTX_CI_COMPILE_CHECK=ON "-DFFMPEG_ROOT=$env:FFMPEG_ROOT"
+          cmake --build build --config Release
+          if (-not (Test-Path build/Release/rtx-vsr-proxy.exe)) { exit 1 }

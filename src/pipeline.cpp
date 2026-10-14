@@ -173,7 +173,7 @@ std::string rtp_container(const Endpoint& endpoint, Direction direction) {
   }
   const bool elementary = endpoint.payload == "h264" || endpoint.payload == "hevc" || endpoint.payload == "es";
   if (!elementary) {
-    return "mpegts";
+    return direction == Direction::Input ? "rtp" : "rtp_mpegts";
   }
   return direction == Direction::Input ? "sdp" : "rtp";
 }
@@ -203,7 +203,8 @@ void apply_color(AVCodecContext* encoder, const ColorChoice& color) {
 }
 
 void set_frame_duration(AVFrame* frame) {
-#if LIBAVUTIL_VERSION_MAJOR >= 57
+  // AVFrame::duration з'явилося у FFmpeg 6 (libavutil 58). У 5.1 (libavutil 57) є лише pkt_duration.
+#if LIBAVUTIL_VERSION_MAJOR >= 58
   frame->duration = 1;
 #else
   frame->pkt_duration = 1;
@@ -241,6 +242,12 @@ struct Session {
         quality(settings.quality, settings.quality_min, settings.quality_max, settings.quality_auto) {}
 
   ~Session() {
+    // Деструктор unique_ptr виконується після тіла. CUDA-контекст процесора належить hw_device,
+    // тому ефект треба закрити, доки контекст ще живий.
+    if (processor) {
+      processor->close();
+      processor.reset();
+    }
     if (packet != nullptr) {
       av_packet_free(&packet);
     }
@@ -494,6 +501,7 @@ struct Session {
         throw std::runtime_error("параметр виходу " + option.first + ": " + ffmpeg_error(option_status));
       }
     }
+    // Елементарний RTP. У rtp_mpegts тип 33 заданий кодеком MPEG-TS, окремий payload_type його ламає.
     if (built.format == "rtp") {
       const char* payload = settings.codec == "hevc" ? "98" : "96";
       const int payload_status = av_opt_set(output->priv_data, "payload_type", payload, 0);

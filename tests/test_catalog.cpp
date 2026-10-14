@@ -43,13 +43,24 @@ int main() {
     }
     CHECK(saw_min && saw_max);
   }
-  const rtx::Mode* rtp_ts = rtx::find_mode(modes, rtx::Direction::Output, "rtp", "client", "mpegts");
+  const rtx::Mode* rtp_ts = rtx::find_mode(modes, rtx::Direction::Output, "rtp", "client", "rtp_mpegts");
+  const rtx::Mode* rtp_default = rtx::find_mode(modes, rtx::Direction::Output, "rtp", "client");
   const rtx::Mode* rtp_es = rtx::find_mode(modes, rtx::Direction::Output, "rtp", "client", "rtp");
   const rtx::Mode* rtp_sdp = rtx::find_mode(modes, rtx::Direction::Input, "rtp", "client", "sdp");
+  const rtx::Mode* rtp_in = rtx::find_mode(modes, rtx::Direction::Input, "rtp", "listener", "rtp");
   CHECK(rtp_ts != nullptr);
+  CHECK(rtp_default == rtp_ts);
+  CHECK(rtx::find_mode(modes, rtx::Direction::Output, "rtp", "client", "mpegts") == nullptr);
   CHECK(rtp_es != nullptr);
   CHECK(rtp_sdp != nullptr);
+  CHECK(rtp_in != nullptr);
+  if (rtp_in != nullptr) {
+    CHECK(rtp_in->container == "rtp");
+    CHECK(rtp_in->ffmpeg_name == "rtp");
+  }
   if (rtp_ts != nullptr) {
+    CHECK(rtp_ts->container == "rtp_mpegts");
+    CHECK(rtp_ts->ffmpeg_name == "rtp_mpegts");
     CHECK(rtp_ts->summary.find("MPEG-TS") != std::string::npos);
     bool saw_rtcp = false;
     for (const std::string& field : rtp_ts->optional) {

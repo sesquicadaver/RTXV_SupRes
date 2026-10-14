@@ -3,7 +3,7 @@
 Локальний відеопроксі: **FFmpeg/NVDEC → RTX Video SDK → NVENC → транспорт**.
 Вхід і вихід обираються незалежно. Програма показує лише ті протоколи й ролі, які є в поточній збірці FFmpeg.
 
-На цій робочій машині немає GPU NVIDIA і CUDA. Ланцюг VSR зібраний у коді й компілюється, коли задано `RTX_VIDEO_SDK_ROOT` і CUDA Toolkit 12.x. Перевірка з живим SDK — на цільовому комп'ютері.
+Утиліта працює на цільовому комп'ютері з NVIDIA, не на машині розробки. Ланцюг VSR зібраний у коді й компілюється, коли задано `RTX_VIDEO_SDK_ROOT` і CUDA Toolkit 12.x. Живий ефект підтверджує лише `doctor` після створення SDK.
 
 ## Збірка тут
 
@@ -20,6 +20,8 @@ ctest --test-dir build --output-on-failure
 ## Збірка на Windows
 
 Штатний шлях CI — MSYS2 UCRT64: `gcc`, `cmake`, `pkgconf`, `ffmpeg`. Сокети HLS, `process_id` і `SIGPIPE` мають окремі гілки для Win32; для MSVC без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
+
+Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x (Linux-образ 12.6 і Windows MSVC+nvcc). Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить.
 
 ## Збірка з RTX Video SDK
 
@@ -46,7 +48,7 @@ CMake підхоплює `samples/RTX_Video_API/rtx_video_api.h` і `rtx_video_a
 
 RTSP додатково має `rtp_port_min` і `rtp_port_max` (локальний діапазон RTP/RTCP). RTP має окремий `rtcp_port`.
 
-`rtp` без payload — це MPEG-TS over RTP. `--output-payload h264|hevc|es` вмикає елементарний RTP-муксер і пише SDP у `--output-sdp`. Вхід елементарного RTP — `--input-payload h264` і `--input-path file.sdp`.
+`rtp` без payload — це MPEG-TS over RTP. Вихід відкриває муксер `rtp_mpegts` (RTP payload type 33, далі синхробайт TS `0x47`). Вхід відкриває демуксер `rtp`. Протокол `rtp://` сам заголовки RTP не додає. `--output-payload h264|hevc|es` лишає елементарний муксер `rtp` і пише SDP у `--output-sdp`. Вхід елементарного RTP — `--input-payload h264` і `--input-path file.sdp`.
 
 HTTP-сервер — режим `http` + `server`. `listen=1` передається словником AVOption в `avio_open2`, не рядком запиту URL. HLS-сервер — окремий режим `hls` + `server`; читання запиту має таймаут 2 с.
 

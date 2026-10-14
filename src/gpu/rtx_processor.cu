@@ -479,6 +479,10 @@ class RtxProcessor final : public FrameProcessor {
 std::unique_ptr<FrameProcessor> create_rtx_processor() { return std::make_unique<RtxProcessor>(); }
 
 std::string probe_rtx_sdk(int gpu_index) {
+#if defined(RTX_SDK_COMPILE_CHECK)
+  (void)gpu_index;
+  return "перевірка компіляції CUDA не є NVIDIA RTX Video SDK";
+#else
   if (cuInit(0) != CUDA_SUCCESS) {
     return "cuInit не вдався";
   }
@@ -501,6 +505,7 @@ std::string probe_rtx_sdk(int gpu_index) {
     return "RTX Video SDK не підтримує цей GPU або не знайшов nvngx_vsr";
   }
   return {};
+#endif
 }
 
 }  // namespace rtx
