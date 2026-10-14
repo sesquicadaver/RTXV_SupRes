@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install FFmpeg development libraries
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libavformat-dev libavcodec-dev libavutil-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libavformat-dev libavcodec-dev libavutil-dev qt6-base-dev
       - name: Configure, build, test
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

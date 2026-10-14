@@ -1,6 +1,7 @@
 #include "processor.hpp"
 
 #include "gpu_probe.hpp"
+#include "report.hpp"
 #include "types.hpp"
 
 extern "C" {
@@ -48,8 +49,8 @@ std::string dependency_blockers(const Settings& settings, const DependencyReport
   }
   if (report.gpus.empty()) {
     text += report.cuda_note + "\n";
-  } else if (settings.gpu < 0 || settings.gpu >= static_cast<int>(report.gpus.size())) {
-    text += "індекс GPU поза межами виявлених пристроїв\n";
+  } else if (find_gpu(report.gpus, settings.gpu) == nullptr) {
+    text += "обраний GPU відсутній серед виявлених пристроїв\n";
   }
   if (settings.codec == "h264" && !report.nvenc_h264) {
     text += "у цій збірці FFmpeg немає кодера h264_nvenc\n";

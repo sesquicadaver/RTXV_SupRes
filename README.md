@@ -12,8 +12,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ./build/rtx-vsr-proxy capabilities
-./build/rtx-vsr-proxy doctor
+./build/rtx-vsr-proxy doctor --json
 ```
+
+Якщо є Qt 6 Widgets, збирається `rtx-vsr-gui`: одне вікно з профілем, джерелом, виходом, GPU поруч із покращенням і згорнутою панеллю бенчмарку. Вікно керує `rtx-vsr-proxy` через `QProcess`; кадри лишаються в конвеєрі CLI. Перевірка без дисплея: `QT_QPA_PLATFORM=offscreen ./build/rtx-vsr-gui --self-check`.
 
 Тести не використовують `assert`, тож Release із `NDEBUG` їх не вимикає.
 
@@ -35,7 +37,9 @@ cmake --build build --config Release
 
 CMake підхоплює `samples/RTX_Video_API/rtx_video_api.h` і `rtx_video_api_cuda_impl.cpp`. Поруч має лежати `nvngx_vsr.dll`.
 
-`doctor` повертає успіх лише після створення й закриття ефекту SDK. Без зібраного SDK або без CUDA-пристрою він завершується кодом 3 і не вважає VSR робочим. Список відеокарт не фільтрується вручну.
+`doctor` повертає успіх лише після створення й закриття ефекту SDK. Без зібраного SDK або без CUDA-пристрою він завершується кодом 3 і не вважає VSR робочим. `doctor --json` друкує той самий висновок структурою: `ok`, `effect`, `blockers`, `gpus` з `uuid` і `vram_bytes`. Наявність CUDA або `h264_nvenc` у FFmpeg не замінює створення ефекту на конкретній карті.
+
+Обраний GPU перевіряється за індексом у списку виявлених пристроїв, а не за довжиною списку: зонд може пропускати окремі номери. Профіль зберігає UUID; `--gpu N` під час запуску скидає UUID і бере числовий індекс.
 
 ## Порти
 
@@ -74,10 +78,20 @@ HTTP-сервер — режим `http` + `server`. `listen=1` передаєт�
 
 NVENC: без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`, preset `llhp` або `ull`. Матриця кольору береться з метаданих кадру (інакше BT.709 для HD і BT.601 для SD), limited або full.
 
-Метрики у stderr, опційно `--metrics-file`:
+Події стану й метрики — окремі рядки JSON на stdout. Журнал FFmpeg лишається на stderr. Штатна зупинка: рядок `stop` на stdin, або SIGINT/SIGTERM. Стан: `connecting`, `waiting`, `running`, `overloaded`, `bypass`, `error`, `stopped`.
 
-`fps`, `frames_in`, `frames_out`, `frames_dropped`, `last_decode_ms`, `last_wait_ms`, `last_process_ms`, `last_encode_ms`, `last_write_ms`, `last_total_ms`, `vsr_quality`, `vsr_scale`, `vsr_state`.
+Метрики, опційно ще й `--metrics-file`:
+
+`fps`, `frames_in`, `frames_out`, `frames_dropped`, час кадру, `vsr_quality`, `vsr_scale`, `vsr_state`, `proxy_p95_ms`, `proxy_p99_ms`, `overload_frames`, `bypass_entries`, фактичні вхідна й вихідна роздільність. `proxy_p95_ms` — час обробки проксі за кожним кадром після прогріву, без затримки камери, мережі й показу у споживачі.
 
 `vsr_state`: `running`, `degraded` (якість знижено), `overloaded` (якість вже мінімальна, час кадру ще великий), `bypass` (VSR вимкнено, розмір кадру збережено).
+
+## Профіль
+
+Спільний JSON схеми 1 для CLI (`--profile`) і вікна. Запис атомарний. Пароль джерела не входить у файл: у JSON лишається URL з іменем користувача без пароля і `credential_id`. Секрет лежить у `secret-tool` (служба `rtx-vsr-proxy`) або в Windows Credential Manager. Явні прапорці командного рядка перекривають профіль. URL і окремі поля адреси разом валідатор відхиляє.
+
+## Бенчмарк
+
+Панель у вікні згорнута. Порівняння йде окремими сеансами, бо зміна масштабу потребує нового запуску. Фіксуються GPU, кодек, бітрейт і транспорт виходу. До восьми комбінацій ×2/×3 і якість 1–4, адаптація вимкнена явним `--quality`. Однаковий запис відтворюється `--pace` у темпі джерела після `--warmup`. У бюджеті лишаються конфігурації за `proxy_p95_ms`; зображення порівнюється у програмі-споживачі. «Порівняти GPU» перевіряє карти послідовно. Результат кожної карти пишеться окремим JSON поруч із параметрами джерела і версією FFmpeg.
 
 Відповідність вимог і тестів: [docs/SPEC_MATRIX.md](docs/SPEC_MATRIX.md).

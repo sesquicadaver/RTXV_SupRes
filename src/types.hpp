@@ -74,6 +74,9 @@ struct Settings {
   std::string metrics_file;
   std::string input_format;
   std::string output_format;
+  std::string gpu_uuid;
+  bool pace_input = false;
+  double warmup_s = 0;
 };
 
 struct GpuInfo {
@@ -81,6 +84,8 @@ struct GpuInfo {
   std::string name;
   int cc_major = 0;
   int cc_minor = 0;
+  std::string uuid;
+  std::uint64_t vram_bytes = 0;
 };
 
 struct DependencyReport {
@@ -108,6 +113,18 @@ struct Metrics {
   int vsr_quality = 0;
   int vsr_scale = 0;
   std::string vsr_state;
+  double proxy_p95_ms = 0;
+  double proxy_p99_ms = 0;
+  std::uint64_t proxy_samples = 0;
+  std::uint64_t overload_frames = 0;
+  std::uint64_t bypass_entries = 0;
+  int input_width = 0;
+  int input_height = 0;
+  int output_width = 0;
+  int output_height = 0;
+  int gpu_index = -1;
+  std::string gpu_uuid;
+  std::string gpu_name;
 };
 
 std::string to_string(Direction direction);

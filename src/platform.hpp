@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstddef>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -13,7 +14,9 @@
 #include <process.h>
 #else
 #include <arpa/inet.h>
+#include <cerrno>
 #include <netdb.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -151,6 +154,56 @@ inline long socket_recvfrom(std::intptr_t fd, char* data, std::size_t size) {
 #else
   return ::recvfrom(static_cast<int>(fd), data, static_cast<std::size_t>(chunk), 0, nullptr, nullptr);
 #endif
+}
+
+// 1 — рядок прочитано, 0 — таймаут, -1 — кінець stdin.
+inline int poll_stdin_line(std::string& line, int timeout_ms) {
+  static std::string pending;
+#if defined(_WIN32)
+  const HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+  DWORD available = 0;
+  if (handle == INVALID_HANDLE_VALUE || !PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) ||
+      available == 0) {
+    Sleep(static_cast<DWORD>(timeout_ms));
+    return 0;
+  }
+  char buffer[256];
+  DWORD read = 0;
+  if (!ReadFile(handle, buffer, sizeof(buffer), &read, nullptr) || read == 0) {
+    return -1;
+  }
+  pending.append(buffer, buffer + read);
+#else
+  pollfd descriptor{};
+  descriptor.fd = STDIN_FILENO;
+  descriptor.events = POLLIN;
+  const int ready = ::poll(&descriptor, 1, timeout_ms);
+  if (ready == 0) {
+    return 0;
+  }
+  if (ready < 0) {
+    return errno == EINTR ? 0 : -1;
+  }
+  char buffer[256];
+  const ssize_t read = ::read(STDIN_FILENO, buffer, sizeof(buffer));
+  if (read < 0) {
+    return errno == EINTR ? 0 : -1;
+  }
+  if (read == 0) {
+    return -1;
+  }
+  pending.append(buffer, buffer + read);
+#endif
+  const auto split = pending.find('\n');
+  if (split == std::string::npos) {
+    return 0;
+  }
+  line = pending.substr(0, split);
+  if (!line.empty() && line.back() == '\r') {
+    line.pop_back();
+  }
+  pending.erase(0, split + 1);
+  return 1;
 }
 
 inline long socket_recv(std::intptr_t fd, char* data, std::size_t size) {

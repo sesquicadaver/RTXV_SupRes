@@ -20,5 +20,7 @@ int main() {
   CHECK(json.find("\"vsr_state\":\"degraded\"") != std::string::npos);
   CHECK(json.find("\"vsr_quality\":2") != std::string::npos);
   CHECK(json.find("\"last_total_ms\":12.50") != std::string::npos);
+  CHECK(json.find("\"proxy_p95_ms\"") != std::string::npos);
+  CHECK(json.find("\"proxy_p99_ms\"") != std::string::npos);
   return rtx_test::result();
 }

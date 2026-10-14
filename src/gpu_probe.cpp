@@ -1,5 +1,7 @@
 #include "gpu_probe.hpp"
 
+#include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,8 @@ struct CudaApi {
   int (*device_get)(int*, int) = nullptr;
   int (*device_name)(char*, int, int) = nullptr;
   int (*device_attr)(int*, int, int) = nullptr;
+  int (*device_uuid)(unsigned char*, int) = nullptr;
+  int (*device_memory)(std::uint64_t*, int) = nullptr;
 
   ~CudaApi() {
 #if defined(_WIN32)
@@ -59,6 +63,12 @@ bool load_cuda(CudaApi& api, std::string& note) {
   api.device_get = reinterpret_cast<int (*)(int*, int)>(load_symbol(api.library, "cuDeviceGet"));
   api.device_name = reinterpret_cast<int (*)(char*, int, int)>(load_symbol(api.library, "cuDeviceGetName"));
   api.device_attr = reinterpret_cast<int (*)(int*, int, int)>(load_symbol(api.library, "cuDeviceGetAttribute"));
+  api.device_uuid = reinterpret_cast<int (*)(unsigned char*, int)>(load_symbol(api.library, "cuDeviceGetUuid"));
+  api.device_memory =
+      reinterpret_cast<int (*)(std::uint64_t*, int)>(load_symbol(api.library, "cuDeviceTotalMem_v2"));
+  if (api.device_memory == nullptr) {
+    api.device_memory = reinterpret_cast<int (*)(std::uint64_t*, int)>(load_symbol(api.library, "cuDeviceTotalMem"));
+  }
   if (api.init == nullptr || api.device_count == nullptr || api.device_get == nullptr || api.device_name == nullptr ||
       api.device_attr == nullptr) {
     note = "CUDA-драйвер не експортує потрібні функції";
@@ -97,6 +107,20 @@ std::vector<GpuInfo> probe_cuda_devices(std::string& note) {
     }
     api.device_attr(&info.cc_major, kCcMajor, device);
     api.device_attr(&info.cc_minor, kCcMinor, device);
+    unsigned char uuid[16] = {};
+    if (api.device_uuid != nullptr && api.device_uuid(uuid, device) == 0) {
+      char hex[40] = {};
+      for (int byte = 0; byte < 16; ++byte) {
+        std::snprintf(hex + byte * 2, 3, "%02x", uuid[byte]);
+      }
+      info.uuid = std::string("GPU-") + hex;
+    }
+    if (api.device_memory != nullptr) {
+      std::uint64_t bytes = 0;
+      if (api.device_memory(&bytes, device) == 0) {
+        info.vram_bytes = bytes;
+      }
+    }
     devices.push_back(info);
   }
   if (devices.empty()) {

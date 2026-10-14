@@ -521,4 +521,51 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
   return {};
 }
 
+std::string port_caption(Direction direction, Role role) {
+  if (direction == Direction::Input && role == Role::Listener) {
+    return "локальний порт прийому";
+  }
+  if (direction == Direction::Input && role == Role::Client) {
+    return "порт джерела";
+  }
+  if (direction == Direction::Output && role == Role::Client) {
+    return "порт отримувача";
+  }
+  if (direction == Direction::Output && (role == Role::Server || role == Role::Listener)) {
+    return "локальний порт сервера";
+  }
+  if (role == Role::Rendezvous) {
+    return "порт rendezvous";
+  }
+  return "порт";
+}
+
+std::string consumer_address(const Endpoint& endpoint) {
+  std::string url = endpoint.url;
+  const auto scheme = url.find("://");
+  if (scheme != std::string::npos) {
+    const auto authority = scheme + 3;
+    const auto slash = url.find('/', authority);
+    const auto at = url.find('@', authority);
+    if (at != std::string::npos && (slash == std::string::npos || at < slash)) {
+      url = url.substr(0, authority) + url.substr(at + 1);
+    }
+    return url;
+  }
+  const bool local = endpoint.role == "server" || endpoint.role == "listener" || endpoint.role == "rendezvous";
+  const std::string host = local ? (endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host) : endpoint.remote_host;
+  const int port = local ? endpoint.local_port : endpoint.remote_port;
+  if (endpoint.protocol.empty() || host.empty() || port < 1) {
+    return {};
+  }
+  url = endpoint.protocol + "://" + host + ":" + std::to_string(port);
+  if (!endpoint.path.empty()) {
+    if (endpoint.path.front() != '/') {
+      url += '/';
+    }
+    url += endpoint.path;
+  }
+  return url;
+}
+
 }  // namespace rtx

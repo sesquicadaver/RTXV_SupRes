@@ -47,6 +47,11 @@ add_library(rtx_core STATIC
   src/hls_server.cpp
   src/pipeline.cpp
   src/cli.cpp
+  src/latency.cpp
+  src/json_mini.cpp
+  src/secrets.cpp
+  src/profile.cpp
+  src/report.cpp
 )
 target_include_directories(rtx_core PUBLIC src)
 target_link_libraries(rtx_core PUBLIC ${RTX_FFMPEG} Threads::Threads)
@@ -60,7 +65,7 @@ else()
 endif()
 if(WIN32)
   target_compile_definitions(rtx_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(rtx_core PUBLIC ws2_32)
+  target_link_libraries(rtx_core PUBLIC ws2_32 advapi32)
 endif()
 
 set(RTX_VIDEO_SDK_ROOT "$ENV{RTX_VIDEO_SDK_ROOT}" CACHE PATH "Корінь NVIDIA RTX Video SDK")
@@ -124,9 +129,18 @@ add_executable(rtx-vsr-proxy src/main.cpp)
 target_link_libraries(rtx-vsr-proxy PRIVATE rtx_core)
 
 enable_testing()
-foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk timestamps color transport rtp_mpegts)
+foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk timestamps color transport rtp_mpegts profile)
   add_executable(test_${test_name} tests/test_${test_name}.cpp)
   target_link_libraries(test_${test_name} PRIVATE rtx_core)
   add_test(NAME ${test_name} COMMAND test_${test_name})
 endforeach()
 set_tests_properties(run_without_sdk transport rtp_mpegts PROPERTIES TIMEOUT 20)
+
+find_package(Qt6 COMPONENTS Widgets QUIET)
+if(TARGET Qt6::Widgets)
+  set(CMAKE_AUTOMOC ON)
+  add_executable(rtx-vsr-gui src/gui/main.cpp src/gui/window.cpp src/gui/window.hpp)
+  target_link_libraries(rtx-vsr-gui PRIVATE rtx_core Qt6::Widgets)
+  add_test(NAME gui_self_check COMMAND rtx-vsr-gui --self-check)
+  set_tests_properties(gui_self_check PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+endif()

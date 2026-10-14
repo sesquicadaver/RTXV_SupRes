@@ -3,6 +3,8 @@
 #include "catalog.hpp"
 #include "dependencies.hpp"
 #include "pipeline.hpp"
+#include "profile.hpp"
+#include "report.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -20,8 +22,8 @@ void print_help() {
 
 Команди:
   capabilities [--json]     лише режими, які є в цій збірці FFmpeg
-  doctor                    GPU, NVENC і чи зібрано RTX Video SDK
-  run                       проксі з окремими входом і виходом
+  doctor [--json]          GPU, NVENC і чи зібрано RTX Video SDK
+  run [--profile файл]      проксі з окремими входом і виходом
 
 Вхід і вихід задаються незалежно. Роль визначає, чий це порт:
   client       порт віддаленого вузла; local_port лише якщо протокол має джерельний порт
@@ -44,7 +46,11 @@ RTP: --input-payload і --output-payload mpegts (типово), h264, hevc аб�
 
 Якість за замовчуванням адаптивна, старт з рівня 2. Масштаб 2 або 3.
 Якщо масштаб 3 не вкладається в інтервал першого кадру, до відкриття виходу він падає до 2.
-Метрики у stderr: fps, frames_dropped, last_total_ms, last_process_ms, vsr_quality, vsr_state.
+Профіль схеми 1: --profile файл.json. Пароль джерела в JSON не пишеться.
+Карта: --gpu-uuid або --gpu N. Порівняння запису: --pace і --warmup секунди; явне --quality вимикає адаптацію.
+Події стану й метрики — рядки JSON на stdout. Журнал FFmpeg лишається на stderr.
+Команда зупинки на stdin: stop
+Метрики містять час обробки проксі: proxy_p95_ms і proxy_p99_ms за кожним кадром вікна.
 vsr_state: running, degraded, overloaded, bypass.
 )";
 }
@@ -194,6 +200,18 @@ int cli_main(int argc, char** argv) {
   }
   Settings settings;
   bool json = false;
+  bool explicit_scale = false;
+  bool explicit_quality = false;
+  bool explicit_quality_min = false;
+  bool explicit_quality_max = false;
+  bool explicit_gpu = false;
+  bool explicit_gpu_uuid = false;
+  bool explicit_codec = false;
+  bool explicit_bitrate = false;
+  bool explicit_input = false;
+  bool explicit_output = false;
+  bool explicit_warmup = false;
+  std::string profile_path;
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--json") {
@@ -216,10 +234,37 @@ int cli_main(int argc, char** argv) {
       }
       return true;
     };
+    if (arg == "--profile") {
+      if (!need(arg)) {
+        return 2;
+      }
+      profile_path = value;
+      continue;
+    }
+    if (arg == "--pace") {
+      settings.pace_input = true;
+      continue;
+    }
+    if (arg == "--warmup") {
+      if (!need(arg) || !parse_double(value, settings.warmup_s) || settings.warmup_s < 0) {
+        return 2;
+      }
+      explicit_warmup = true;
+      continue;
+    }
+    if (arg == "--gpu-uuid") {
+      if (!need(arg)) {
+        return 2;
+      }
+      settings.gpu_uuid = value;
+      explicit_gpu_uuid = true;
+      continue;
+    }
     if (arg == "--scale") {
       if (!need(arg) || !parse_int(value, settings.scale)) {
         return 2;
       }
+      explicit_scale = true;
       continue;
     }
     if (arg == "--quality") {
@@ -234,24 +279,28 @@ int cli_main(int argc, char** argv) {
       } else {
         settings.quality_auto = false;
       }
+      explicit_quality = true;
       continue;
     }
     if (arg == "--quality-min") {
       if (!need(arg) || !parse_int(value, settings.quality_min)) {
         return 2;
       }
+      explicit_quality_min = true;
       continue;
     }
     if (arg == "--quality-max") {
       if (!need(arg) || !parse_int(value, settings.quality_max)) {
         return 2;
       }
+      explicit_quality_max = true;
       continue;
     }
     if (arg == "--gpu") {
       if (!need(arg) || !parse_int(value, settings.gpu)) {
         return 2;
       }
+      explicit_gpu = true;
       continue;
     }
     if (arg == "--codec") {
@@ -260,12 +309,14 @@ int cli_main(int argc, char** argv) {
         return 2;
       }
       settings.codec = value;
+      explicit_codec = true;
       continue;
     }
     if (arg == "--bitrate") {
       if (!need(arg) || !parse_i64(value, settings.bitrate) || settings.bitrate <= 0) {
         return 2;
       }
+      explicit_bitrate = true;
       continue;
     }
     if (arg == "--metrics-interval") {
@@ -305,12 +356,75 @@ int cli_main(int argc, char** argv) {
       return 2;
     }
     const bool input = input_flag == 0;
+    if (input) {
+      explicit_input = true;
+    } else {
+      explicit_output = true;
+    }
     const std::string flag = arg.substr(input ? 8 : 9);
     Endpoint& endpoint = input ? settings.input : settings.output;
     if (!assign_endpoint_flag(endpoint, flag, value)) {
       std::cerr << "некоректне значення " << arg << '\n';
       return 2;
     }
+  }
+
+  if (!profile_path.empty()) {
+    Profile profile;
+    std::string error;
+    if (!load_profile_file(profile_path, profile, error)) {
+      std::cerr << error << '\n';
+      return 2;
+    }
+    const std::unique_ptr<SecretStore> store = system_secret_store();
+    if (!open_input_secret(profile, *store, error)) {
+      std::cerr << error << '\n';
+      return 2;
+    }
+    Settings loaded;
+    apply_profile(profile, loaded);
+    loaded.verbose = settings.verbose;
+    loaded.metrics_interval = settings.metrics_interval;
+    loaded.metrics_file = settings.metrics_file;
+    loaded.input_format = settings.input_format;
+    loaded.output_format = settings.output_format;
+    loaded.pace_input = settings.pace_input;
+    if (explicit_scale) {
+      loaded.scale = settings.scale;
+    }
+    if (explicit_quality) {
+      loaded.quality_auto = settings.quality_auto;
+      loaded.quality = settings.quality;
+    }
+    if (explicit_quality_min) {
+      loaded.quality_min = settings.quality_min;
+    }
+    if (explicit_quality_max) {
+      loaded.quality_max = settings.quality_max;
+    }
+    if (explicit_gpu) {
+      loaded.gpu = settings.gpu;
+      loaded.gpu_uuid.clear();
+    }
+    if (explicit_gpu_uuid) {
+      loaded.gpu_uuid = settings.gpu_uuid;
+    }
+    if (explicit_codec) {
+      loaded.codec = settings.codec;
+    }
+    if (explicit_bitrate) {
+      loaded.bitrate = settings.bitrate;
+    }
+    if (explicit_input) {
+      loaded.input = settings.input;
+    }
+    if (explicit_output) {
+      loaded.output = settings.output;
+    }
+    if (explicit_warmup) {
+      loaded.warmup_s = settings.warmup_s;
+    }
+    settings = loaded;
   }
 
   if (settings.verbose) {
@@ -346,12 +460,21 @@ int cli_main(int argc, char** argv) {
     if (probe_settings.codec != "h264" && probe_settings.codec != "hevc") {
       probe_settings.codec = "h264";
     }
-    const std::string blockers = dependency_blockers(probe_settings, report);
+    const std::string missing_gpu = bind_gpu_selection(probe_settings, report);
+    std::string blockers = dependency_blockers(probe_settings, report);
+    if (!missing_gpu.empty()) {
+      blockers += missing_gpu + "\n";
+    }
+    if (json) {
+      std::cout << doctor_json(report, blockers, modes.size()) << '\n';
+      return blockers.empty() ? 0 : 3;
+    }
     std::cout << (blockers.empty() ? report.sdk_note + "\n" + report.cuda_note + "\n" : blockers);
     std::cout << "h264_nvenc: " << (report.nvenc_h264 ? "так" : "ні") << '\n';
     std::cout << "hevc_nvenc: " << (report.nvenc_hevc ? "так" : "ні") << '\n';
     for (const GpuInfo& gpu : report.gpus) {
-      std::cout << "GPU " << gpu.index << " " << gpu.name << " CC " << gpu.cc_major << '.' << gpu.cc_minor << '\n';
+      std::cout << "GPU " << gpu.index << " " << gpu.name << " " << gpu.uuid << " CC " << gpu.cc_major << '.'
+                << gpu.cc_minor << '\n';
     }
     std::cout << "режимів: " << modes.size() << '\n';
     if (!blockers.empty()) {

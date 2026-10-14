@@ -4,9 +4,12 @@
 #include "color.hpp"
 #include "dependencies.hpp"
 #include "hls_server.hpp"
+#include "latency.hpp"
 #include "mailbox.hpp"
 #include "metrics.hpp"
 #include "platform.hpp"
+#include "json_mini.hpp"
+#include "report.hpp"
 #include "processor.hpp"
 #include "timestamps.hpp"
 
@@ -24,6 +27,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libavutil/version.h>
@@ -57,7 +61,24 @@ void throw_if(int status, const std::string& action) {
   }
 }
 
+std::mutex g_emit_mu;
+
+void emit_line(const std::string& line) {
+  std::lock_guard<std::mutex> lock(g_emit_mu);
+  std::cout << line << '\n';
+  std::cout.flush();
+}
+
 std::string redact(std::string url) {
+  const auto scheme = url.find("://");
+  if (scheme != std::string::npos) {
+    const auto authority = scheme + 3;
+    const auto slash = url.find('/', authority);
+    const auto at = url.find('@', authority);
+    if (at != std::string::npos && (slash == std::string::npos || at < slash)) {
+      url.replace(authority, at - authority, "***");
+    }
+  }
   const std::string key = "passphrase=";
   const auto pos = url.find(key);
   if (pos == std::string::npos) {
@@ -236,10 +257,22 @@ struct Session {
   PtsMap pts;
   AdaptiveQuality quality{2, 1, 4, true};
   std::string sdp_path;
+  bool pace_input = false;
+  double warmup_s = 0;
+  ProxyLatency latency;
+  bool warmup_done = false;
+  bool saw_bypass = false;
+  std::string public_state;
+  std::chrono::steady_clock::time_point measure_from{};
+  bool pace_origin_set = false;
+  std::chrono::steady_clock::time_point pace_origin{};
+  std::int64_t pace_origin_pts = AV_NOPTS_VALUE;
 
   explicit Session(const Settings& settings)
       : active_scale(settings.scale),
-        quality(settings.quality, settings.quality_min, settings.quality_max, settings.quality_auto) {}
+        quality(settings.quality, settings.quality_min, settings.quality_max, settings.quality_auto),
+        pace_input(settings.pace_input),
+        warmup_s(settings.warmup_s) {}
 
   ~Session() {
     // Деструктор unique_ptr виконується після тіла. CUDA-контекст процесора належить hw_device,
@@ -281,10 +314,21 @@ struct Session {
     std::lock_guard<std::mutex> lock(error_mu);
     if (error.empty()) {
       error = text;
+      emit_line(status_event("error", text));
     }
     running.store(false);
     mailbox.close();
   }
+
+  Metrics snapshot_metrics() {
+    std::lock_guard<std::mutex> lock(metrics_mu);
+    metrics.proxy_p95_ms = latency.percentile(0.95);
+    metrics.proxy_p99_ms = latency.percentile(0.99);
+    metrics.proxy_samples = latency.samples();
+    return metrics;
+  }
+
+  void publish_metrics() { emit_line(metrics_event(snapshot_metrics())); }
 
   void open_input(const BuiltEndpoint& built, const Settings& settings) {
     AVFormatContext* context = avformat_alloc_context();
@@ -355,6 +399,8 @@ struct Session {
     if (decoder->width < 2 || decoder->height < 2 || decoder->width % 2 != 0 || decoder->height % 2 != 0) {
       throw std::runtime_error("NVDEC і NVENC потребують парних ширини й висоти");
     }
+    metrics.input_width = decoder->width;
+    metrics.input_height = decoder->height;
     AVRational rate = stream->avg_frame_rate;
     if (rate.num <= 0 || rate.den <= 0) {
       rate = stream->r_frame_rate;
@@ -521,9 +567,15 @@ struct Session {
     if (!sdp_path.empty()) {
       write_sdp();
     }
+    metrics.output_width = dst_w;
+    metrics.output_height = dst_h;
     metrics.vsr_quality = processor->quality();
     metrics.vsr_scale = active_scale;
     metrics.vsr_state = "running";
+    measure_from = std::chrono::steady_clock::now();
+    public_state = "running";
+    emit_line(status_event("running", {}));
+    publish_metrics();
   }
 
   void write_sdp() {
@@ -645,6 +697,24 @@ struct Session {
     return owned;
   }
 
+  void pace_owned_frame(AVFrame* frame) {
+    if (!pace_origin_set) {
+      pace_origin = std::chrono::steady_clock::now();
+      pace_origin_pts = frame->pts;
+      pace_origin_set = true;
+      return;
+    }
+    double delay_ms = budget_ms;
+    if (frame->pts != AV_NOPTS_VALUE && pace_origin_pts != AV_NOPTS_VALUE && frame->pts > pace_origin_pts &&
+        input_tb.den > 0) {
+      delay_ms = av_q2d(input_tb) * static_cast<double>(frame->pts - pace_origin_pts) * 1000.0;
+    }
+    const auto target = pace_origin + std::chrono::duration<double, std::milli>(delay_ms);
+    while (running.load() && std::chrono::steady_clock::now() < target) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
   void decode_loop() {
     AVPacket* incoming = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
@@ -666,6 +736,9 @@ struct Session {
         break;
       }
       av_frame_move_ref(owned, frame);
+      if (pace_input) {
+        pace_owned_frame(owned);
+      }
       mailbox.publish(owned);
     }
     av_packet_free(&incoming);
@@ -758,6 +831,29 @@ struct Session {
       metrics.vsr_quality = processor->degraded() ? 0 : processor->quality();
       metrics.vsr_scale = active_scale;
       metrics.vsr_state = state;
+      const bool warmed = warmup_s <= 0 || warmup_done;
+      if (!warmed && std::chrono::steady_clock::now() - measure_from >= std::chrono::duration<double>(warmup_s)) {
+        latency.clear();
+        warmup_done = true;
+      }
+      if (warmup_s <= 0 || warmup_done) {
+        latency.add(total_ms);
+      }
+      if (state == "overloaded") {
+        ++metrics.overload_frames;
+      }
+      if (state == "bypass") {
+        if (!saw_bypass) {
+          ++metrics.bypass_entries;
+          saw_bypass = true;
+        }
+      } else {
+        saw_bypass = false;
+      }
+    }
+    if (state != public_state) {
+      public_state = state;
+      emit_line(status_event(state, {}));
     }
     const auto now = std::chrono::steady_clock::now();
     if (settings.metrics_interval > 0 && now - last_report >= std::chrono::duration<double>(settings.metrics_interval)) {
@@ -766,9 +862,12 @@ struct Session {
       {
         std::lock_guard<std::mutex> lock(metrics_mu);
         metrics.fps = seconds > 0 ? static_cast<double>(window_out) / seconds : 0;
+        metrics.proxy_p95_ms = latency.percentile(0.95);
+        metrics.proxy_p99_ms = latency.percentile(0.99);
+        metrics.proxy_samples = latency.samples();
         snapshot = metrics;
       }
-      std::cerr << metrics_json(snapshot) << '\n';
+      emit_line(metrics_event(snapshot));
       if (!settings.metrics_file.empty() && !write_metrics_file(settings.metrics_file, snapshot)) {
         std::cerr << "не вдалося записати файл метрик\n";
       }
@@ -816,6 +915,43 @@ struct SignalGuard {
   ~SignalGuard() { g_running = nullptr; }
 };
 
+struct ControlReader {
+  std::atomic<bool> stop{false};
+  std::thread thread;
+  ControlReader() {
+    thread = std::thread([this] {
+      std::string line;
+      while (!stop.load()) {
+        const int got = poll_stdin_line(line, 200);
+        if (got < 0) {
+          break;
+        }
+        if (got > 0 && line == "stop" && g_running != nullptr) {
+          g_running->store(false);
+        }
+      }
+    });
+  }
+  ~ControlReader() {
+    stop.store(true);
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+};
+
+std::string benchmark_event(const Metrics& metrics) {
+  std::string body = metrics_event(metrics);
+  const std::string from = "\"type\":\"metrics\"";
+  const auto pos = body.find(from);
+  if (pos != std::string::npos) {
+    body.replace(pos, from.size(), "\"type\":\"benchmark\"");
+  }
+  const char* version = av_version_info();
+  body.insert(body.size() - 1, std::string(",\"ffmpeg\":\"") + json_escape(version == nullptr ? "" : version) + "\"");
+  return body;
+}
+
 }  // namespace
 
 int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const OptionProbe& probe) {
@@ -850,8 +986,13 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     std::cerr << same << '\n';
     return 2;
   }
+  Settings resolved = settings;
   const DependencyReport report = inspect_dependencies();
-  const std::string blockers = dependency_blockers(settings, report);
+  const std::string missing_gpu = bind_gpu_selection(resolved, report);
+  std::string blockers = dependency_blockers(resolved, report);
+  if (!missing_gpu.empty()) {
+    blockers += missing_gpu + "\n";
+  }
   if (!blockers.empty()) {
     std::cerr << blockers;
     return 3;
@@ -873,15 +1014,22 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     }
     std::cerr << "вхід: " << redact(input_built.public_url) << '\n';
     std::cerr << "вихід: " << redact(output_built.public_url) << '\n';
-    Session session(settings);
+    Session session(resolved);
+    if (const GpuInfo* gpu = find_gpu(report.gpus, resolved.gpu)) {
+      session.metrics.gpu_index = gpu->index;
+      session.metrics.gpu_uuid = gpu->uuid;
+      session.metrics.gpu_name = gpu->name;
+    }
     g_running = &session.running;
     SignalGuard guard;
+    ControlReader control;
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
     ignore_pipe_signal();
-    session.open_input(input_built, settings);
-    session.open_decoder(settings);
-    session.open_processor(settings);
+    emit_line(status_event("connecting", {}));
+    session.open_input(input_built, resolved);
+    session.open_decoder(resolved);
+    session.open_processor(resolved);
     AVFrame* first = session.pull_one_frame();
     if (first == nullptr) {
       std::cerr << session.error << '\n';
@@ -897,8 +1045,11 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     std::thread decoder([&session] { session.decode_loop(); });
     std::thread worker;
     try {
-      session.open_encoder(settings, output_built);
-      worker = std::thread([&session, &settings] { session.process_loop(settings); });
+      if (resolved.output.role == "listener" || resolved.output.role == "server") {
+        emit_line(status_event("waiting", {}));
+      }
+      session.open_encoder(resolved, output_built);
+      worker = std::thread([&session, &resolved] { session.process_loop(resolved); });
       decoder.join();
       worker.join();
     } catch (...) {
@@ -912,11 +1063,16 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
       }
       throw;
     }
+    session.publish_metrics();
+    if (resolved.pace_input) {
+      emit_line(benchmark_event(session.snapshot_metrics()));
+    }
     std::lock_guard<std::mutex> lock(session.error_mu);
     if (!session.error.empty()) {
       std::cerr << session.error << '\n';
       return 1;
     }
+    emit_line(status_event("stopped", {}));
     return 0;
   } catch (const std::exception& ex) {
     g_running = nullptr;

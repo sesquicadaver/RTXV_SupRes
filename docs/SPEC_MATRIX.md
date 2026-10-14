@@ -24,3 +24,8 @@
 | `AVFrame::duration` лише з libavutil 58 | `src/pipeline.cpp` | компіляція на FFmpeg 4/5 (`pkt_duration`) і 6 |
 | Прапори C++ не потрапляють у nvcc; перевірка компіляції `.cu` не видає себе за SDK | `CMakeLists.txt`, `ci/compile_check/` | job `cuda-compile` (doctor код 3), job `windows-cuda` (лінк без GPU) |
 | CUDA-контекст процесора закривається до звільнення `hw_device` | `src/pipeline.cpp` | порядок у `~Session()` |
+| Профіль JSON схеми 1, атомарний запис, пароль лише в сховищі ОС | `src/profile.cpp`, `src/secrets.cpp` | `tests/test_profile.cpp` |
+| `doctor --json`; події стану й метрики на stdout; `stop` на stdin | `src/report.cpp`, `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_profile.cpp`; `doctor --json` без SDK завершується кодом 3 |
+| Обраний GPU є в списку за індексом; профіль зберігає UUID | `src/processor_factory.cpp`, `src/gpu_probe.cpp`, `src/report.cpp` | `tests/test_profile.cpp` |
+| Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
+| Одне вікно Qt: профіль, джерело, вихід, GPU, старт/стоп, згорнутий бенчмарк | `src/gui/` | `gui_self_check` з `QT_QPA_PLATFORM=offscreen`, якщо зібрано Qt 6 |
