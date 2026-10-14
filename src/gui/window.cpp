@@ -1,6 +1,7 @@
 #include "window.hpp"
 
 #include "endpoint.hpp"
+#include "latency.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -8,6 +9,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -35,6 +37,43 @@
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+
+namespace {
+
+void configure_port(QSpinBox* spin) {
+  spin->setRange(0, 65535);
+  spin->setSpecialValueText("—");
+}
+
+QString params_line(const std::vector<std::pair<std::string, std::string>>& params) {
+  QStringList parts;
+  for (const auto& param : params) {
+    parts.push_back(QString::fromStdString(param.first + "=" + param.second));
+  }
+  return parts.join('&');
+}
+
+void read_params_line(const QString& text, std::vector<std::pair<std::string, std::string>>& params) {
+  const QStringList parts = text.split('&', Qt::SkipEmptyParts);
+  for (const QString& piece : parts) {
+    const int eq = piece.indexOf('=');
+    if (eq > 0) {
+      params.emplace_back(piece.left(eq).trimmed().toStdString(), piece.mid(eq + 1).trimmed().toStdString());
+    }
+  }
+}
+
+QStringList field_names(const QStringList& required, const QStringList& optional) {
+  QStringList fields = required;
+  for (const QString& name : optional) {
+    if (!fields.contains(name)) {
+      fields.push_back(name);
+    }
+  }
+  return fields;
+}
+
+}  // namespace
 
 namespace {
 
@@ -99,8 +138,12 @@ QStringList required_of(const QVariantMap& mode) { return mode.value("required")
 
 QVariantMap mode_payload(const QJsonObject& mode, const QString& codec) {
   QStringList required;
+  QStringList optional;
   for (const QJsonValue& item : mode.value("required").toArray()) {
     required.push_back(item.toString());
+  }
+  for (const QJsonValue& item : mode.value("optional").toArray()) {
+    optional.push_back(item.toString());
   }
   QVariantMap payload;
   payload.insert("protocol", mode.value("protocol").toString());
@@ -108,6 +151,7 @@ QVariantMap mode_payload(const QJsonObject& mode, const QString& codec) {
   payload.insert("container", mode.value("container").toString());
   payload.insert("codec", codec);
   payload.insert("required", required);
+  payload.insert("optional", optional);
   return payload;
 }
 
@@ -117,11 +161,33 @@ Window::~Window() {
   const auto processes = findChildren<QProcess*>();
   for (QProcess* process : processes) {
     process->disconnect(this);
-    if (process->state() != QProcess::NotRunning) {
-      process->kill();
-      process->waitForFinished(2000);
-    }
   }
+  stop_process(proxy_);
+  stop_process(bench_);
+}
+
+void Window::closeEvent(QCloseEvent* event) {
+  bench_abort_ = true;
+  stop_process(proxy_);
+  stop_process(bench_);
+  QMainWindow::closeEvent(event);
+}
+
+void Window::stop_process(QProcess* process) {
+  if (process == nullptr || process->state() == QProcess::NotRunning) {
+    return;
+  }
+  process->disconnect(this);
+  process->write("stop\n");
+  if (process->waitForFinished(3000)) {
+    return;
+  }
+  process->terminate();
+  if (process->waitForFinished(1000)) {
+    return;
+  }
+  process->kill();
+  process->waitForFinished(1000);
 }
 
 Window::Window(QWidget* parent) : QMainWindow(parent) {
@@ -143,7 +209,38 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     }
     status_->setText(code == 3 ? "Помилка: немає підтвердженого GPU або SDK" : "Помилка запуску");
   });
+  connect(proxy_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+    if (error != QProcess::FailedToStart) {
+      return;
+    }
+    running_ = false;
+    start_->setText("Запустити");
+    gpu_->setEnabled(true);
+    refresh_gpu_->setEnabled(true);
+    bench_run_->setEnabled(true);
+    status_->setText("Не вдалося запустити rtx-vsr-proxy");
+  });
+  connect(bench_, &QProcess::readyReadStandardOutput, this, &Window::read_benchmark);
   connect(bench_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) { finish_benchmark(); });
+  connect(bench_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+    if (error != QProcess::FailedToStart || bench_settled_) {
+      return;
+    }
+    bench_abort_ = true;
+    bench_wait_reason_ = "не вдалося запустити";
+    status_->setText("Не вдалося запустити бенчмарк");
+    finish_benchmark();
+  });
+  bench_wait_timer_ = new QTimer(this);
+  bench_wait_timer_->setSingleShot(true);
+  connect(bench_wait_timer_, &QTimer::timeout, this, [this] {
+    bench_abort_ = true;
+    bench_wait_reason_ = "немає споживача";
+    status_->setText("Очікування споживача вичерпано");
+    if (bench_->state() != QProcess::NotRunning) {
+      bench_->write("stop\n");
+    }
+  });
   reload_modes();
   reload_gpus();
   refresh_profiles();
@@ -175,17 +272,38 @@ void Window::build() {
   url_ = new QLineEdit;
   input_protocol_ = new QComboBox;
   input_host_ = new QLineEdit;
+  input_local_host_ = new QLineEdit;
   input_path_ = new QLineEdit;
+  input_app_ = new QLineEdit;
+  input_playpath_ = new QLineEdit;
+  input_params_ = new QLineEdit;
+  input_params_->setPlaceholderText("key=value&key2=value2");
   input_port_ = new QSpinBox;
-  input_port_->setRange(0, 65535);
-  input_port_->setSpecialValueText("—");
+  input_local_port_ = new QSpinBox;
+  input_rtcp_ = new QSpinBox;
+  input_rtp_min_ = new QSpinBox;
+  input_rtp_max_ = new QSpinBox;
+  configure_port(input_port_);
+  configure_port(input_local_port_);
+  configure_port(input_rtcp_);
+  configure_port(input_rtp_min_);
+  configure_port(input_rtp_max_);
   input_role_ = new QComboBox;
-  input_port_caption_ = new QLabel("локальний порт прийому");
+  input_port_caption_ = new QLabel("порт джерела");
+  input_local_caption_ = new QLabel("локальний порт прийому");
   source_form->addRow(source_url_, url_);
   source_form->addRow(source_fields_, input_protocol_);
-  source_form->addRow("Адреса", input_host_);
-  source_form->addRow("Файл", input_path_);
+  source_form->addRow("Віддалена адреса", input_host_);
   source_form->addRow(input_port_caption_, input_port_);
+  source_form->addRow("Локальна адреса", input_local_host_);
+  source_form->addRow(input_local_caption_, input_local_port_);
+  source_form->addRow("Файл", input_path_);
+  source_form->addRow("Застосунок", input_app_);
+  source_form->addRow("Потік", input_playpath_);
+  source_form->addRow("RTCP", input_rtcp_);
+  source_form->addRow("RTP від", input_rtp_min_);
+  source_form->addRow("RTP до", input_rtp_max_);
+  source_form->addRow("Параметри", input_params_);
   source_form->addRow("Роль", input_role_);
   root->addWidget(source);
 
@@ -193,11 +311,26 @@ void Window::build() {
   auto* output_form = new QFormLayout(output);
   output_mode_ = new QComboBox;
   output_host_ = new QLineEdit("127.0.0.1");
+  output_local_host_ = new QLineEdit("127.0.0.1");
   output_path_ = new QLineEdit;
+  output_sdp_ = new QLineEdit;
+  output_app_ = new QLineEdit;
+  output_playpath_ = new QLineEdit;
+  output_directory_ = new QLineEdit;
+  output_params_ = new QLineEdit;
+  output_params_->setPlaceholderText("key=value&key2=value2");
   output_port_ = new QSpinBox;
-  output_port_->setRange(0, 65535);
-  output_port_->setSpecialValueText("—");
+  output_local_port_ = new QSpinBox;
+  output_rtcp_ = new QSpinBox;
+  output_rtp_min_ = new QSpinBox;
+  output_rtp_max_ = new QSpinBox;
+  configure_port(output_port_);
+  configure_port(output_local_port_);
+  configure_port(output_rtcp_);
+  configure_port(output_rtp_min_);
+  configure_port(output_rtp_max_);
   output_port_caption_ = new QLabel("порт отримувача");
+  output_local_caption_ = new QLabel("локальний порт сервера");
   consumer_ = new QLineEdit;
   consumer_->setReadOnly(true);
   auto* copy = new QPushButton("Копіювати");
@@ -205,9 +338,19 @@ void Window::build() {
   consumer_row->addWidget(consumer_, 1);
   consumer_row->addWidget(copy);
   output_form->addRow("Режим", output_mode_);
-  output_form->addRow("Адреса", output_host_);
-  output_form->addRow("Файл", output_path_);
+  output_form->addRow("Віддалена адреса", output_host_);
   output_form->addRow(output_port_caption_, output_port_);
+  output_form->addRow("Локальна адреса", output_local_host_);
+  output_form->addRow(output_local_caption_, output_local_port_);
+  output_form->addRow("Файл", output_path_);
+  output_form->addRow("SDP", output_sdp_);
+  output_form->addRow("Застосунок", output_app_);
+  output_form->addRow("Потік", output_playpath_);
+  output_form->addRow("Каталог", output_directory_);
+  output_form->addRow("RTCP", output_rtcp_);
+  output_form->addRow("RTP від", output_rtp_min_);
+  output_form->addRow("RTP до", output_rtp_max_);
+  output_form->addRow("Параметри", output_params_);
   output_form->addRow("Адреса для споживача", consumer_row);
   root->addWidget(output);
 
@@ -274,17 +417,24 @@ void Window::build() {
   bench_warmup_->setRange(0, 30);
   bench_warmup_->setValue(2);
   bench_warmup_->setSuffix(" с");
+  bench_wait_ = new QSpinBox;
+  bench_wait_->setRange(1, 120);
+  bench_wait_->setValue(15);
+  bench_wait_->setSuffix(" с");
   compare_gpus_ = new QCheckBox("Порівняти GPU");
   bench_form->addRow("Запис", file_row);
   bench_form->addRow("Бюджет", bench_budget_);
   bench_form->addRow("Прогрів", bench_warmup_);
+  bench_form->addRow("Очікування споживача", bench_wait_);
   bench_form->addRow(compare_gpus_);
   bench_layout->addLayout(bench_form);
   auto* bench_buttons = new QHBoxLayout;
   bench_run_ = new QPushButton("Запустити бенчмарк");
+  bench_cancel_ = new QPushButton("Скасувати");
   bench_apply_ = new QPushButton("Застосувати вибране");
   bench_progress_ = new QProgressBar;
   bench_buttons->addWidget(bench_run_);
+  bench_buttons->addWidget(bench_cancel_);
   bench_buttons->addWidget(bench_apply_);
   bench_buttons->addWidget(bench_progress_, 1);
   bench_layout->addLayout(bench_buttons);
@@ -336,11 +486,16 @@ void Window::build() {
   connect(input_role_, &QComboBox::currentIndexChanged, this, [this](int) { update_source_mode(); });
   connect(output_mode_, &QComboBox::currentIndexChanged, this, [this](int) { update_output_fields(); });
   connect(output_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
+  connect(output_local_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_path_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_port_, &QSpinBox::valueChanged, this, [this](int) { update_consumer(); });
+  connect(output_local_port_, &QSpinBox::valueChanged, this, [this](int) { update_consumer(); });
   connect(copy, &QPushButton::clicked, this, [this] { QGuiApplication::clipboard()->setText(consumer_->text()); });
   connect(refresh_gpu_, &QPushButton::clicked, this, &Window::reload_gpus);
-  connect(gpu_, &QComboBox::currentIndexChanged, this, [this](int) {
+  connect(gpu_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    if (index >= 0) {
+      unresolved_gpu_.clear();
+    }
     check_selected_gpu();
     mark_dirty();
   });
@@ -354,13 +509,24 @@ void Window::build() {
     }
   });
   connect(bench_run_, &QPushButton::clicked, this, &Window::start_benchmark);
+  connect(bench_cancel_, &QPushButton::clicked, this, &Window::cancel_benchmark);
   connect(bench_apply_, &QPushButton::clicked, this, &Window::apply_benchmark_row);
   const auto touch = [this] { mark_dirty(); };
   connect(url_, &QLineEdit::textChanged, this, touch);
   connect(input_host_, &QLineEdit::textChanged, this, touch);
+  connect(input_local_host_, &QLineEdit::textChanged, this, touch);
   connect(input_path_, &QLineEdit::textChanged, this, touch);
+  connect(input_app_, &QLineEdit::textChanged, this, touch);
+  connect(input_playpath_, &QLineEdit::textChanged, this, touch);
+  connect(input_params_, &QLineEdit::textChanged, this, touch);
   connect(output_host_, &QLineEdit::textChanged, this, touch);
+  connect(output_local_host_, &QLineEdit::textChanged, this, touch);
   connect(output_path_, &QLineEdit::textChanged, this, touch);
+  connect(output_sdp_, &QLineEdit::textChanged, this, touch);
+  connect(output_app_, &QLineEdit::textChanged, this, touch);
+  connect(output_playpath_, &QLineEdit::textChanged, this, touch);
+  connect(output_directory_, &QLineEdit::textChanged, this, touch);
+  connect(output_params_, &QLineEdit::textChanged, this, touch);
   connect(bitrate_, &QLineEdit::textChanged, this, touch);
   connect(scale_, &QComboBox::currentIndexChanged, this, [this](int) { mark_dirty(); });
   connect(quality_, &QComboBox::currentIndexChanged, this, [this](int) { mark_dirty(); });
@@ -454,7 +620,10 @@ void Window::apply_modes(const QJsonArray& modes) {
 }
 
 void Window::apply_gpus(const QJsonObject& doctor) {
-  const QString selected = gpu_->currentData().toString();
+  QString wanted = gpu_->currentData().toString();
+  if (wanted.isEmpty()) {
+    wanted = unresolved_gpu_;
+  }
   gpu_->blockSignals(true);
   gpu_->clear();
   const QJsonArray gpus = doctor.value("gpus").toArray();
@@ -468,13 +637,19 @@ void Window::apply_gpus(const QJsonObject& doctor) {
   }
   if (gpus.isEmpty()) {
     gpu_->addItem("GPU не виявлено", QString());
+  }
+  const int index = wanted.isEmpty() ? -1 : gpu_->findData(wanted);
+  if (!wanted.isEmpty() && index < 0) {
+    unresolved_gpu_ = wanted;
+    gpu_->setCurrentIndex(-1);
+    gpu_fit_->setText("Збережений GPU відсутній, оберіть інший.");
+  } else if (gpus.isEmpty()) {
+    unresolved_gpu_.clear();
+    gpu_->setCurrentIndex(0);
     gpu_fit_->setText(doctor.value("cuda_note").toString("CUDA-пристроїв немає. Оберіть карту після підключення."));
   } else {
-    const int index = gpu_->findData(selected);
+    unresolved_gpu_.clear();
     gpu_->setCurrentIndex(index < 0 ? 0 : index);
-    if (!selected.isEmpty() && index < 0) {
-      gpu_fit_->setText("Збережений GPU відсутній, оберіть інший.");
-    }
   }
   gpu_->blockSignals(false);
   check_selected_gpu();
@@ -560,45 +735,68 @@ void Window::update_source_mode() {
   const bool url = source_url_->isChecked();
   url_->setVisible(url);
   input_protocol_->setEnabled(!url);
-  QStringList required;
+  QStringList fields;
   if (!url) {
     for (const QJsonValue& value : modes_) {
       const QJsonObject mode = value.toObject();
       if (mode.value("direction").toString() == "input" &&
           mode.value("protocol").toString() == input_protocol_->currentData().toString() &&
           mode.value("role").toString() == input_role_->currentData().toString()) {
+        QStringList required;
+        QStringList optional;
         for (const QJsonValue& item : mode.value("required").toArray()) {
           required.push_back(item.toString());
         }
+        for (const QJsonValue& item : mode.value("optional").toArray()) {
+          optional.push_back(item.toString());
+        }
+        fields = field_names(required, optional);
         break;
       }
     }
   }
-  const bool host = list_has(required, "remote_host") || list_has(required, "local_host");
-  const bool port = list_has(required, "remote_port") || list_has(required, "local_port");
-  const bool path = list_has(required, "path");
-  input_host_->setVisible(!url && host);
-  input_port_->setVisible(!url && port);
-  input_port_caption_->setVisible(!url && port);
-  input_path_->setVisible(!url && path);
-  rtx::Role role = rtx::Role::Listener;
+  input_host_->setVisible(!url && list_has(fields, "remote_host"));
+  input_port_->setVisible(!url && list_has(fields, "remote_port"));
+  input_port_caption_->setVisible(!url && list_has(fields, "remote_port"));
+  input_local_host_->setVisible(!url && list_has(fields, "local_host"));
+  input_local_port_->setVisible(!url && list_has(fields, "local_port"));
+  input_local_caption_->setVisible(!url && list_has(fields, "local_port"));
+  input_path_->setVisible(!url && list_has(fields, "path"));
+  input_app_->setVisible(!url && list_has(fields, "app"));
+  input_playpath_->setVisible(!url && list_has(fields, "playpath"));
+  input_rtcp_->setVisible(!url && list_has(fields, "rtcp_port"));
+  input_rtp_min_->setVisible(!url && list_has(fields, "rtp_port_min"));
+  input_rtp_max_->setVisible(!url && list_has(fields, "rtp_port_max"));
+  input_params_->setVisible(!url && list_has(fields, "params"));
+  rtx::Role role = rtx::Role::Client;
   rtx::parse_role(input_role_->currentData().toString().toStdString(), role);
-  input_port_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Input, role)));
+  input_port_caption_->setText("порт джерела");
+  input_local_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Input, role)));
   mark_dirty();
 }
 
 void Window::update_output_fields() {
   const QVariantMap mode = output_mode_->currentData().toMap();
-  const QStringList required = required_of(mode);
+  const QStringList fields = field_names(required_of(mode), mode.value("optional").toStringList());
   rtx::Role role = rtx::Role::Client;
   rtx::parse_role(mode.value("role").toString().toStdString(), role);
-  output_port_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Output, role)));
-  const bool host = list_has(required, "remote_host") || list_has(required, "local_host");
-  const bool port = list_has(required, "remote_port") || list_has(required, "local_port");
-  output_host_->setVisible(host);
-  output_port_->setVisible(port);
-  output_port_caption_->setVisible(port);
-  output_path_->setVisible(list_has(required, "path"));
+  output_port_caption_->setText("порт отримувача");
+  output_local_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Output, role)));
+  output_host_->setVisible(list_has(fields, "remote_host"));
+  output_port_->setVisible(list_has(fields, "remote_port"));
+  output_port_caption_->setVisible(list_has(fields, "remote_port"));
+  output_local_host_->setVisible(list_has(fields, "local_host"));
+  output_local_port_->setVisible(list_has(fields, "local_port"));
+  output_local_caption_->setVisible(list_has(fields, "local_port"));
+  output_path_->setVisible(list_has(fields, "path"));
+  output_sdp_->setVisible(list_has(fields, "sdp"));
+  output_app_->setVisible(list_has(fields, "app"));
+  output_playpath_->setVisible(list_has(fields, "playpath"));
+  output_directory_->setVisible(list_has(fields, "directory"));
+  output_rtcp_->setVisible(list_has(fields, "rtcp_port"));
+  output_rtp_min_->setVisible(list_has(fields, "rtp_port_min"));
+  output_rtp_max_->setVisible(list_has(fields, "rtp_port_max"));
+  output_params_->setVisible(list_has(fields, "params"));
   update_consumer();
   check_selected_gpu();
   mark_dirty();
@@ -624,7 +822,11 @@ void Window::update_consumer() {
 rtx::Profile Window::profile_from_form() const {
   rtx::Profile profile;
   profile.name = profiles_->currentText().isEmpty() ? "Профіль" : profiles_->currentText().toStdString();
-  profile.gpu_uuid = gpu_->currentData().toString().toStdString();
+  if (gpu_->currentIndex() < 0 && !unresolved_gpu_.isEmpty()) {
+    profile.gpu_uuid = unresolved_gpu_.toStdString();
+  } else {
+    profile.gpu_uuid = gpu_->currentData().toString().toStdString();
+  }
   profile.scale = scale_->currentData().toInt();
   profile.quality_auto = quality_auto_->isChecked();
   profile.quality = quality_->currentData().toInt();
@@ -639,26 +841,45 @@ rtx::Profile Window::profile_from_form() const {
     if (profile.output.protocol == "rtp") {
       profile.output.payload = container == "rtp" ? profile.codec : "mpegts";
     }
-    if (list_has(required_of(mode), "path")) {
+    if (output_path_->isVisible()) {
       profile.output.path = output_path_->text().trimmed().toStdString();
     }
-  }
-  const bool local_out = profile.output.role == "listener" || profile.output.role == "server" ||
-                         profile.output.role == "rendezvous";
-  if (output_host_->isVisible()) {
-    if (local_out) {
-      profile.output.local_host = output_host_->text().trimmed().toStdString();
-    } else {
-      profile.output.remote_host = output_host_->text().trimmed().toStdString();
+    if (output_sdp_->isVisible()) {
+      profile.output.sdp = output_sdp_->text().trimmed().toStdString();
     }
+    if (output_app_->isVisible()) {
+      profile.output.app = output_app_->text().trimmed().toStdString();
+    }
+    if (output_playpath_->isVisible()) {
+      profile.output.playpath = output_playpath_->text().trimmed().toStdString();
+    }
+    if (output_directory_->isVisible()) {
+      profile.output.directory = output_directory_->text().trimmed().toStdString();
+    }
+    if (output_rtcp_->isVisible()) {
+      profile.output.rtcp_port = output_rtcp_->value() > 0 ? output_rtcp_->value() : -1;
+    }
+    if (output_rtp_min_->isVisible()) {
+      profile.output.rtp_port_min = output_rtp_min_->value() > 0 ? output_rtp_min_->value() : -1;
+    }
+    if (output_rtp_max_->isVisible()) {
+      profile.output.rtp_port_max = output_rtp_max_->value() > 0 ? output_rtp_max_->value() : -1;
+    }
+    if (output_params_->isVisible()) {
+      read_params_line(output_params_->text(), profile.output.params);
+    }
+  }
+  if (output_host_->isVisible()) {
+    profile.output.remote_host = output_host_->text().trimmed().toStdString();
   }
   if (output_port_->isVisible()) {
-    const int port = output_port_->value() > 0 ? output_port_->value() : -1;
-    if (local_out) {
-      profile.output.local_port = port;
-    } else {
-      profile.output.remote_port = port;
-    }
+    profile.output.remote_port = output_port_->value() > 0 ? output_port_->value() : -1;
+  }
+  if (output_local_host_->isVisible()) {
+    profile.output.local_host = output_local_host_->text().trimmed().toStdString();
+  }
+  if (output_local_port_->isVisible()) {
+    profile.output.local_port = output_local_port_->value() > 0 ? output_local_port_->value() : -1;
   }
   if (source_url_->isChecked()) {
     profile.input.url = url_->text().trimmed().toStdString();
@@ -670,25 +891,38 @@ rtx::Profile Window::profile_from_form() const {
   } else {
     profile.input.protocol = input_protocol_->currentData().toString().toStdString();
     profile.input.role = input_role_->currentData().toString().toStdString();
-    const bool local_in = profile.input.role == "listener" || profile.input.role == "server" ||
-                          profile.input.role == "rendezvous";
     if (input_host_->isVisible()) {
-      if (local_in) {
-        profile.input.local_host = input_host_->text().trimmed().toStdString();
-      } else {
-        profile.input.remote_host = input_host_->text().trimmed().toStdString();
-      }
+      profile.input.remote_host = input_host_->text().trimmed().toStdString();
     }
     if (input_port_->isVisible()) {
-      const int port = input_port_->value() > 0 ? input_port_->value() : -1;
-      if (local_in) {
-        profile.input.local_port = port;
-      } else {
-        profile.input.remote_port = port;
-      }
+      profile.input.remote_port = input_port_->value() > 0 ? input_port_->value() : -1;
+    }
+    if (input_local_host_->isVisible()) {
+      profile.input.local_host = input_local_host_->text().trimmed().toStdString();
+    }
+    if (input_local_port_->isVisible()) {
+      profile.input.local_port = input_local_port_->value() > 0 ? input_local_port_->value() : -1;
     }
     if (input_path_->isVisible()) {
       profile.input.path = input_path_->text().trimmed().toStdString();
+    }
+    if (input_app_->isVisible()) {
+      profile.input.app = input_app_->text().trimmed().toStdString();
+    }
+    if (input_playpath_->isVisible()) {
+      profile.input.playpath = input_playpath_->text().trimmed().toStdString();
+    }
+    if (input_rtcp_->isVisible()) {
+      profile.input.rtcp_port = input_rtcp_->value() > 0 ? input_rtcp_->value() : -1;
+    }
+    if (input_rtp_min_->isVisible()) {
+      profile.input.rtp_port_min = input_rtp_min_->value() > 0 ? input_rtp_min_->value() : -1;
+    }
+    if (input_rtp_max_->isVisible()) {
+      profile.input.rtp_port_max = input_rtp_max_->value() > 0 ? input_rtp_max_->value() : -1;
+    }
+    if (input_params_->isVisible()) {
+      read_params_line(input_params_->text(), profile.input.params);
     }
   }
   if (profile.input.url == loaded_url_.toStdString()) {
@@ -699,8 +933,15 @@ rtx::Profile Window::profile_from_form() const {
 
 void Window::form_from_profile(const rtx::Profile& profile, const QString& visible_url) {
   const int gpu_index = gpu_->findData(QString::fromStdString(profile.gpu_uuid));
-  if (gpu_index >= 0) {
-    gpu_->setCurrentIndex(gpu_index);
+  if (!profile.gpu_uuid.empty() && gpu_index < 0) {
+    unresolved_gpu_ = QString::fromStdString(profile.gpu_uuid);
+    gpu_->setCurrentIndex(-1);
+    gpu_fit_->setText("Збережений GPU відсутній, оберіть інший.");
+  } else {
+    unresolved_gpu_.clear();
+    if (gpu_index >= 0) {
+      gpu_->setCurrentIndex(gpu_index);
+    }
   }
   const int scale_index = scale_->findData(profile.scale);
   if (scale_index >= 0) {
@@ -726,11 +967,17 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
     if (role >= 0) {
       input_role_->setCurrentIndex(role);
     }
-    const bool local = profile.input.role == "listener" || profile.input.role == "server" ||
-                       profile.input.role == "rendezvous";
-    input_host_->setText(QString::fromStdString(local ? profile.input.local_host : profile.input.remote_host));
-    input_port_->setValue(local ? std::max(0, profile.input.local_port) : std::max(0, profile.input.remote_port));
+    input_host_->setText(QString::fromStdString(profile.input.remote_host));
+    input_port_->setValue(std::max(0, profile.input.remote_port));
+    input_local_host_->setText(QString::fromStdString(profile.input.local_host));
+    input_local_port_->setValue(std::max(0, profile.input.local_port));
     input_path_->setText(QString::fromStdString(profile.input.path));
+    input_app_->setText(QString::fromStdString(profile.input.app));
+    input_playpath_->setText(QString::fromStdString(profile.input.playpath));
+    input_rtcp_->setValue(std::max(0, profile.input.rtcp_port));
+    input_rtp_min_->setValue(std::max(0, profile.input.rtp_port_min));
+    input_rtp_max_->setValue(std::max(0, profile.input.rtp_port_max));
+    input_params_->setText(params_line(profile.input.params));
   }
   const QString container = profile.output.protocol == "rtp" && profile.output.payload != "mpegts" &&
                                     !profile.output.payload.empty()
@@ -746,34 +993,36 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
       break;
     }
   }
-  const bool local_out = profile.output.role == "listener" || profile.output.role == "server" ||
-                         profile.output.role == "rendezvous";
-  output_host_->setText(QString::fromStdString(local_out ? profile.output.local_host : profile.output.remote_host));
-  output_port_->setValue(local_out ? std::max(0, profile.output.local_port) : std::max(0, profile.output.remote_port));
+  output_host_->setText(QString::fromStdString(profile.output.remote_host));
+  output_port_->setValue(std::max(0, profile.output.remote_port));
+  output_local_host_->setText(QString::fromStdString(profile.output.local_host));
+  output_local_port_->setValue(std::max(0, profile.output.local_port));
   output_path_->setText(QString::fromStdString(profile.output.path));
+  output_sdp_->setText(QString::fromStdString(profile.output.sdp));
+  output_app_->setText(QString::fromStdString(profile.output.app));
+  output_playpath_->setText(QString::fromStdString(profile.output.playpath));
+  output_directory_->setText(QString::fromStdString(profile.output.directory));
+  output_rtcp_->setValue(std::max(0, profile.output.rtcp_port));
+  output_rtp_min_->setValue(std::max(0, profile.output.rtp_port_min));
+  output_rtp_max_->setValue(std::max(0, profile.output.rtp_port_max));
+  output_params_->setText(params_line(profile.output.params));
 }
 
 bool Window::write_profile(const QString& path, QString& error, bool remember) {
   rtx::Profile profile = profile_from_form();
   const std::unique_ptr<rtx::SecretStore> store = rtx::system_secret_store();
   std::string failure;
-  if (source_url_->isChecked()) {
-    const rtx::UrlSecret parts = rtx::split_url_secret(url_->text().trimmed().toStdString());
-    if (parts.has_password) {
-      if (!rtx::seal_input_secret(profile, url_->text().trimmed().toStdString(), secret_id(path).toStdString(), *store,
-                                 failure)) {
-        error = QString::fromStdString(failure);
-        return false;
-      }
-      loaded_credential_ = QString::fromStdString(profile.input.credential_id);
-      loaded_url_ = QString::fromStdString(profile.input.url);
-      url_->setText(loaded_url_);
-    } else if (url_->text().trimmed() != loaded_url_ && !loaded_credential_.isEmpty()) {
-      store->remove(loaded_credential_.toStdString(), failure);
-      profile.input.credential_id.clear();
-      loaded_credential_.clear();
-      loaded_url_ = url_->text().trimmed();
-    }
+  const bool drop_owned = remember && path == profile_path_;
+  const std::string raw_url = source_url_->isChecked() ? url_->text().trimmed().toStdString() : profile.input.url;
+  if (!rtx::commit_input_secret(profile, raw_url, secret_id(path).toStdString(), loaded_url_.toStdString(),
+                               loaded_credential_.toStdString(), drop_owned, *store, failure)) {
+    error = QString::fromStdString(failure);
+    return false;
+  }
+  if (drop_owned && source_url_->isChecked()) {
+    loaded_credential_ = QString::fromStdString(profile.input.credential_id);
+    loaded_url_ = QString::fromStdString(profile.input.url);
+    url_->setText(loaded_url_);
   }
   if (!rtx::save_profile_file(path.toStdString(), profile, failure)) {
     error = QString::fromStdString(failure);
@@ -800,6 +1049,7 @@ void Window::load_profile(const QString& path) {
   form_from_profile(profile, loaded_url_);
   profile_path_ = path;
   if (!profile.gpu_uuid.empty() && gpu_->findData(QString::fromStdString(profile.gpu_uuid)) < 0) {
+    unresolved_gpu_ = QString::fromStdString(profile.gpu_uuid);
     gpu_fit_->setText("Збережений GPU відсутній, оберіть інший.");
   }
   saved_fingerprint_ = QString::fromStdString(rtx::profile_json(profile_from_form()));
@@ -833,6 +1083,10 @@ void Window::mark_dirty() {
 
 void Window::start_proxy() {
   if (running_) {
+    return;
+  }
+  if (gpu_->currentIndex() < 0 && !unresolved_gpu_.isEmpty()) {
+    status_->setText("Збережений GPU відсутній, оберіть інший.");
     return;
   }
   const QString path = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/session.json";
@@ -922,6 +1176,8 @@ void Window::start_benchmark() {
   bench_queue_.clear();
   bench_card_ = {};
   bench_card_uuid_.clear();
+  bench_abort_ = false;
+  bench_stdout_.clear();
   bench_table_->setRowCount(0);
   QStringList gpus;
   QStringList names;
@@ -960,7 +1216,8 @@ void Window::run_next_benchmark() {
     flush_benchmark(bench_card_uuid_);
     bench_run_->setEnabled(true);
     start_->setEnabled(true);
-    status_->setText("Бенчмарк завершено");
+    status_->setText(bench_wait_reason_ == "скасовано" ? "Бенчмарк скасовано" : "Бенчмарк завершено");
+    bench_wait_reason_.clear();
     return;
   }
   const BenchJob& job = bench_queue_.at(bench_index_);
@@ -986,7 +1243,49 @@ void Window::run_next_benchmark() {
     args << "--gpu-uuid" << job.gpu_uuid;
   }
   status_->setText(QString("Бенчмарк %1/%2").arg(bench_index_ + 1).arg(bench_queue_.size()));
+  bench_stdout_.clear();
+  bench_settled_ = false;
+  bench_wait_timer_->stop();
   bench_->start(proxy_program(), args);
+}
+
+void Window::cancel_benchmark() {
+  bench_abort_ = true;
+  bench_wait_reason_ = "скасовано";
+  bench_wait_timer_->stop();
+  if (bench_->state() != QProcess::NotRunning) {
+    bench_->write("stop\n");
+    return;
+  }
+  bench_index_ = bench_queue_.size();
+  bench_run_->setEnabled(true);
+  start_->setEnabled(true);
+  bench_abort_ = false;
+  status_->setText("Бенчмарк скасовано");
+}
+
+void Window::read_benchmark() {
+  bench_stdout_.append(bench_->readAllStandardOutput());
+  int offset = 0;
+  while (offset < bench_stdout_.size()) {
+    const int end = bench_stdout_.indexOf('\n', offset);
+    if (end < 0) {
+      break;
+    }
+    const QJsonObject event = QJsonDocument::fromJson(bench_stdout_.mid(offset, end - offset)).object();
+    offset = end + 1;
+    if (event.value("type").toString() != "status") {
+      continue;
+    }
+    const QString state = event.value("state").toString();
+    if (state == "waiting") {
+      if (!bench_wait_timer_->isActive()) {
+        bench_wait_timer_->start(bench_wait_->value() * 1000);
+      }
+    } else if (state == "running" || state == "overloaded" || state == "bypass" || state == "stopped") {
+      bench_wait_timer_->stop();
+    }
+  }
 }
 
 void Window::flush_benchmark(const QString& uuid) {
@@ -1013,15 +1312,18 @@ void Window::flush_benchmark(const QString& uuid) {
 }
 
 void Window::finish_benchmark() {
-  if (bench_index_ >= bench_queue_.size()) {
+  if (bench_settled_ || bench_index_ >= bench_queue_.size()) {
     return;
   }
+  bench_settled_ = true;
+  bench_wait_timer_->stop();
+  bench_stdout_.append(bench_->readAllStandardOutput());
   const BenchJob job = bench_queue_.at(bench_index_);
   if (!bench_card_.isEmpty() && bench_card_uuid_ != job.gpu_uuid) {
     flush_benchmark(bench_card_uuid_);
   }
   bench_card_uuid_ = job.gpu_uuid;
-  const QByteArray output = bench_->readAllStandardOutput();
+  const QByteArray output = bench_stdout_;
   QJsonObject result;
   for (const QByteArray& line : output.split('\n')) {
     const QJsonDocument document = QJsonDocument::fromJson(line);
@@ -1035,6 +1337,7 @@ void Window::finish_benchmark() {
     auto* item = new QTableWidgetItem(text);
     item->setData(Qt::UserRole, job.scale);
     item->setData(Qt::UserRole + 1, job.quality);
+    item->setData(Qt::UserRole + 2, job.gpu_uuid);
     bench_table_->setItem(row, column, item);
   };
   put(0, job.gpu_name);
@@ -1045,7 +1348,12 @@ void Window::finish_benchmark() {
   saved.insert("quality", job.quality);
   saved.insert("gpu_name", job.gpu_name);
   saved.insert("gpu_uuid", job.gpu_uuid);
-  if (result.isEmpty()) {
+  if (bench_abort_) {
+    put(3, bench_wait_reason_.isEmpty() ? QString("скасовано") : bench_wait_reason_);
+    saved.insert("error", bench_wait_reason_);
+    bench_index_ = bench_queue_.size();
+    bench_abort_ = false;
+  } else if (result.isEmpty()) {
     const QString reason = QString::fromUtf8(bench_->readAllStandardError()).trimmed();
     put(3, bench_->exitCode() == 3 ? "непридатний" : "помилка");
     put(4, reason.left(80));
@@ -1060,13 +1368,15 @@ void Window::finish_benchmark() {
     const double dropped = result.value("frames_dropped").toDouble();
     const double incoming = std::max(1.0, result.value("frames_in").toDouble());
     const double p95 = result.value("proxy_p95_ms").toDouble();
+    const auto samples = static_cast<std::uint64_t>(result.value("proxy_samples").toDouble());
+    const bool within = rtx::measurement_within_budget(samples, p95, bench_budget_->value());
     put(3, QString::number(result.value("fps").toDouble(), 'f', 1));
     put(4, QString::number(100.0 * dropped / incoming, 'f', 1) + "%");
-    put(5, QString::number(p95, 'f', 1));
-    put(6, QString::number(result.value("proxy_p99_ms").toDouble(), 'f', 1));
+    put(5, samples == 0 ? QString("немає виміру") : QString::number(p95, 'f', 1));
+    put(6, samples == 0 ? QString("немає виміру") : QString::number(result.value("proxy_p99_ms").toDouble(), 'f', 1));
     put(7, result.value("overload_frames").toDouble() > 0 ? "так" : "ні");
     put(8, result.value("bypass_entries").toDouble() > 0 ? "так" : "ні");
-    if (p95 > bench_budget_->value()) {
+    if (samples > 0 && !within) {
       bench_table_->item(row, 5)->setBackground(QColor(80, 40, 40));
     }
     saved.insert("fps", result.value("fps"));
@@ -1076,7 +1386,8 @@ void Window::finish_benchmark() {
     saved.insert("proxy_p99_ms", result.value("proxy_p99_ms"));
     saved.insert("overload_frames", result.value("overload_frames"));
     saved.insert("bypass_entries", result.value("bypass_entries"));
-    saved.insert("within_budget", p95 <= bench_budget_->value());
+    saved.insert("proxy_samples", static_cast<double>(samples));
+    saved.insert("within_budget", within);
     saved.insert("ffmpeg", result.value("ffmpeg"));
     saved.insert("input_width", result.value("input_width"));
     saved.insert("input_height", result.value("input_height"));
@@ -1098,8 +1409,18 @@ void Window::apply_benchmark_row() {
   }
   const int scale = bench_table_->item(row, 0)->data(Qt::UserRole).toInt();
   const int quality = bench_table_->item(row, 0)->data(Qt::UserRole + 1).toInt();
+  const QString uuid = bench_table_->item(row, 0)->data(Qt::UserRole + 2).toString();
   if (scale < 2) {
     return;
+  }
+  const int gpu_index = uuid.isEmpty() ? -1 : gpu_->findData(uuid);
+  if (!uuid.isEmpty() && gpu_index < 0) {
+    unresolved_gpu_ = uuid;
+    gpu_->setCurrentIndex(-1);
+    gpu_fit_->setText("Збережений GPU відсутній, оберіть інший.");
+  } else if (gpu_index >= 0) {
+    unresolved_gpu_.clear();
+    gpu_->setCurrentIndex(gpu_index);
   }
   const int scale_index = scale_->findData(scale);
   if (scale_index >= 0) {

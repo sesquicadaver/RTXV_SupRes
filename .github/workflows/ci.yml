@@ -47,6 +47,7 @@ jobs:
       - name: Compile and link the CUDA translation unit without a GPU
         run: |
           docker run --rm -v "$PWD":/src -w /src nvidia/cuda:12.6.3-devel-ubuntu22.04 bash -lc '
+            set -euo pipefail
             apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y cmake pkg-config g++ libavformat-dev libavcodec-dev libavutil-dev
             cmake -S . -B build-cuda -DCMAKE_BUILD_TYPE=Release -DRTX_CI_COMPILE_CHECK=ON
             cmake --build build-cuda -j"$(nproc)"

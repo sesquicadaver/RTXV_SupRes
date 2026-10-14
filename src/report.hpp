@@ -9,6 +9,9 @@ namespace rtx {
 const GpuInfo* find_gpu(const std::vector<GpuInfo>& gpus, int index);
 const GpuInfo* find_gpu_uuid(const std::vector<GpuInfo>& gpus, const std::string& uuid);
 
+// Лише перелік пристроїв. Створення ефекту SDK сюди не входить.
+std::string gpu_list_blocker(const Settings& settings, const DependencyReport& report);
+
 // Якщо задано UUID, числовий індекс сеансу береться з поточного переліку.
 std::string bind_gpu_selection(Settings& settings, const DependencyReport& report);
 

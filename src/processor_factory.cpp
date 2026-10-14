@@ -47,10 +47,9 @@ std::string dependency_blockers(const Settings& settings, const DependencyReport
   if (!report.sdk_built) {
     text += report.sdk_note + "\n";
   }
-  if (report.gpus.empty()) {
-    text += report.cuda_note + "\n";
-  } else if (find_gpu(report.gpus, settings.gpu) == nullptr) {
-    text += "обраний GPU відсутній серед виявлених пристроїв\n";
+  const std::string gpu_blocker = gpu_list_blocker(settings, report);
+  if (!gpu_blocker.empty()) {
+    text += gpu_blocker + "\n";
   }
   if (settings.codec == "h264" && !report.nvenc_h264) {
     text += "у цій збірці FFmpeg немає кодера h264_nvenc\n";

@@ -7,6 +7,9 @@
 #include <QMainWindow>
 #include <QProcess>
 
+class QCloseEvent;
+class QTimer;
+
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -25,6 +28,9 @@ class Window : public QMainWindow {
  public:
   explicit Window(QWidget* parent = nullptr);
   ~Window() override;
+
+ protected:
+  void closeEvent(QCloseEvent* event) override;
 
  private:
   struct BenchJob {
@@ -59,6 +65,9 @@ class Window : public QMainWindow {
   void run_next_benchmark();
   void finish_benchmark();
   void apply_benchmark_row();
+  void cancel_benchmark();
+  void read_benchmark();
+  void stop_process(QProcess* process);
   QString proxy_program() const;
   QString secret_id(const QString& path) const;
 
@@ -71,15 +80,35 @@ class Window : public QMainWindow {
   QLineEdit* url_ = nullptr;
   QComboBox* input_protocol_ = nullptr;
   QLineEdit* input_host_ = nullptr;
+  QLineEdit* input_local_host_ = nullptr;
   QLineEdit* input_path_ = nullptr;
+  QLineEdit* input_app_ = nullptr;
+  QLineEdit* input_playpath_ = nullptr;
+  QLineEdit* input_params_ = nullptr;
   QSpinBox* input_port_ = nullptr;
+  QSpinBox* input_local_port_ = nullptr;
+  QSpinBox* input_rtcp_ = nullptr;
+  QSpinBox* input_rtp_min_ = nullptr;
+  QSpinBox* input_rtp_max_ = nullptr;
   QComboBox* input_role_ = nullptr;
   QLabel* input_port_caption_ = nullptr;
+  QLabel* input_local_caption_ = nullptr;
   QComboBox* output_mode_ = nullptr;
   QLineEdit* output_host_ = nullptr;
+  QLineEdit* output_local_host_ = nullptr;
   QLineEdit* output_path_ = nullptr;
+  QLineEdit* output_sdp_ = nullptr;
+  QLineEdit* output_app_ = nullptr;
+  QLineEdit* output_playpath_ = nullptr;
+  QLineEdit* output_directory_ = nullptr;
+  QLineEdit* output_params_ = nullptr;
   QSpinBox* output_port_ = nullptr;
+  QSpinBox* output_local_port_ = nullptr;
+  QSpinBox* output_rtcp_ = nullptr;
+  QSpinBox* output_rtp_min_ = nullptr;
+  QSpinBox* output_rtp_max_ = nullptr;
   QLabel* output_port_caption_ = nullptr;
+  QLabel* output_local_caption_ = nullptr;
   QLineEdit* consumer_ = nullptr;
   QComboBox* gpu_ = nullptr;
   QPushButton* refresh_gpu_ = nullptr;
@@ -98,7 +127,10 @@ class Window : public QMainWindow {
   QSpinBox* bench_warmup_ = nullptr;
   QCheckBox* compare_gpus_ = nullptr;
   QPushButton* bench_run_ = nullptr;
+  QPushButton* bench_cancel_ = nullptr;
+  QSpinBox* bench_wait_ = nullptr;
   QProgressBar* bench_progress_ = nullptr;
+  QTimer* bench_wait_timer_ = nullptr;
   QTableWidget* bench_table_ = nullptr;
   QPushButton* bench_apply_ = nullptr;
   QProcess* proxy_ = nullptr;
@@ -111,7 +143,12 @@ class Window : public QMainWindow {
   QString saved_fingerprint_;
   QString loaded_url_;
   QString loaded_credential_;
+  QString unresolved_gpu_;
+  QByteArray bench_stdout_;
+  QString bench_wait_reason_;
   bool running_ = false;
+  bool bench_abort_ = false;
+  bool bench_settled_ = false;
   QList<BenchJob> bench_queue_;
   int bench_index_ = 0;
   QString bench_profile_;

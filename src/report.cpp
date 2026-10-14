@@ -43,6 +43,16 @@ const GpuInfo* find_gpu(const std::vector<GpuInfo>& gpus, int index) {
   return nullptr;
 }
 
+std::string gpu_list_blocker(const Settings& settings, const DependencyReport& report) {
+  if (report.gpus.empty()) {
+    return report.cuda_note.empty() ? "CUDA-пристроїв немає" : report.cuda_note;
+  }
+  if (find_gpu(report.gpus, settings.gpu) == nullptr) {
+    return "обраний GPU відсутній серед виявлених пристроїв";
+  }
+  return {};
+}
+
 const GpuInfo* find_gpu_uuid(const std::vector<GpuInfo>& gpus, const std::string& uuid) {
   if (uuid.empty()) {
     return nullptr;

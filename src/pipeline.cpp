@@ -46,6 +46,7 @@ void on_signal(int) {
 
 struct FrameTiming {
   std::chrono::steady_clock::time_point decoded_at{};
+  std::chrono::steady_clock::time_point ready_at{};
   double decode_ms = 0;
 };
 
@@ -264,6 +265,10 @@ struct Session {
   bool saw_bypass = false;
   std::string public_state;
   std::chrono::steady_clock::time_point measure_from{};
+  std::uint64_t measured_frames = 0;
+  std::chrono::steady_clock::time_point fps_origin{};
+  std::chrono::steady_clock::time_point fps_last{};
+  bool fps_origin_set = false;
   bool pace_origin_set = false;
   std::chrono::steady_clock::time_point pace_origin{};
   std::int64_t pace_origin_pts = AV_NOPTS_VALUE;
@@ -325,6 +330,12 @@ struct Session {
     metrics.proxy_p95_ms = latency.percentile(0.95);
     metrics.proxy_p99_ms = latency.percentile(0.99);
     metrics.proxy_samples = latency.samples();
+    if (measured_frames >= 2) {
+      const double seconds = std::chrono::duration<double>(fps_last - fps_origin).count();
+      metrics.fps = seconds > 0 ? static_cast<double>(measured_frames - 1) / seconds : 0;
+    } else {
+      metrics.fps = 0;
+    }
     return metrics;
   }
 
@@ -618,6 +629,7 @@ struct Session {
     auto* timing = new FrameTiming;
     timing->decode_ms = decode_ms;
     timing->decoded_at = std::chrono::steady_clock::now();
+    timing->ready_at = timing->decoded_at;
     frame->opaque = timing;
     std::lock_guard<std::mutex> lock(metrics_mu);
     ++metrics.frames_in;
@@ -713,6 +725,9 @@ struct Session {
     while (running.load() && std::chrono::steady_clock::now() < target) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    if (auto* timing = static_cast<FrameTiming*>(frame->opaque)) {
+      timing->ready_at = std::chrono::steady_clock::now();
+    }
   }
 
   void decode_loop() {
@@ -747,11 +762,11 @@ struct Session {
     mailbox.close();
   }
 
-  bool handle_frame(AVFrame* input_frame, const Settings& settings, std::uint64_t& window_out,
+  bool handle_frame(AVFrame* input_frame, const Settings& settings,
                     std::chrono::steady_clock::time_point& last_report) {
     auto* timing = static_cast<FrameTiming*>(input_frame->opaque);
     const auto taken = std::chrono::steady_clock::now();
-    const double wait_ms = timing == nullptr ? 0 : elapsed_ms(timing->decoded_at, taken);
+    const double wait_ms = timing == nullptr ? 0 : proxy_queue_ms(timing->decoded_at, timing->ready_at, taken);
     const double decode_ms = timing == nullptr ? 0 : timing->decode_ms;
     AVFrame* output_frame = av_frame_alloc();
     if (output_frame == nullptr || av_hwframe_get_buffer(encoder->hw_frames_ctx, output_frame, 0) < 0) {
@@ -818,7 +833,6 @@ struct Session {
     {
       std::lock_guard<std::mutex> lock(metrics_mu);
       ++metrics.frames_out;
-      ++window_out;
       metrics.frames_dropped = mailbox.dropped();
       metrics.last_process_ms = process_ms;
       metrics.avg_process_ms = metrics.avg_process_ms == 0 ? process_ms : metrics.avg_process_ms * 0.9 + process_ms * 0.1;
@@ -837,6 +851,13 @@ struct Session {
         warmup_done = true;
       }
       if (warmup_s <= 0 || warmup_done) {
+        const auto measured_at = std::chrono::steady_clock::now();
+        if (!fps_origin_set) {
+          fps_origin = measured_at;
+          fps_origin_set = true;
+        }
+        fps_last = measured_at;
+        ++measured_frames;
         latency.add(total_ms);
       }
       if (state == "overloaded") {
@@ -857,21 +878,11 @@ struct Session {
     }
     const auto now = std::chrono::steady_clock::now();
     if (settings.metrics_interval > 0 && now - last_report >= std::chrono::duration<double>(settings.metrics_interval)) {
-      const double seconds = std::chrono::duration<double>(now - last_report).count();
-      Metrics snapshot;
-      {
-        std::lock_guard<std::mutex> lock(metrics_mu);
-        metrics.fps = seconds > 0 ? static_cast<double>(window_out) / seconds : 0;
-        metrics.proxy_p95_ms = latency.percentile(0.95);
-        metrics.proxy_p99_ms = latency.percentile(0.99);
-        metrics.proxy_samples = latency.samples();
-        snapshot = metrics;
-      }
+      const Metrics snapshot = snapshot_metrics();
       emit_line(metrics_event(snapshot));
       if (!settings.metrics_file.empty() && !write_metrics_file(settings.metrics_file, snapshot)) {
         std::cerr << "не вдалося записати файл метрик\n";
       }
-      window_out = 0;
       last_report = now;
     }
     return true;
@@ -880,7 +891,6 @@ struct Session {
   void process_loop(const Settings& settings) {
     packet = av_packet_alloc();
     auto last_report = std::chrono::steady_clock::now();
-    std::uint64_t window_out = 0;
     while (true) {
       AVFrame* input_frame = mailbox.take(running, std::chrono::milliseconds(50));
       if (input_frame == nullptr) {
@@ -890,7 +900,7 @@ struct Session {
         continue;
       }
       try {
-        if (!handle_frame(input_frame, settings, window_out, last_report)) {
+        if (!handle_frame(input_frame, settings, last_report)) {
           break;
         }
       } catch (const std::exception& ex) {

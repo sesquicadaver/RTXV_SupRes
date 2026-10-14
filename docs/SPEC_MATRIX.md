@@ -26,6 +26,9 @@
 | CUDA-контекст процесора закривається до звільнення `hw_device` | `src/pipeline.cpp` | порядок у `~Session()` |
 | Профіль JSON схеми 1, атомарний запис, пароль лише в сховищі ОС | `src/profile.cpp`, `src/secrets.cpp` | `tests/test_profile.cpp` |
 | `doctor --json`; події стану й метрики на stdout; `stop` на stdin | `src/report.cpp`, `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_profile.cpp`; `doctor --json` без SDK завершується кодом 3 |
-| Обраний GPU є в списку за індексом; профіль зберігає UUID | `src/processor_factory.cpp`, `src/gpu_probe.cpp`, `src/report.cpp` | `tests/test_profile.cpp` |
+| Обраний GPU є в списку за індексом; перевірка списку окремо від створення SDK | `src/report.cpp`, `src/processor_factory.cpp` | `tests/test_profile.cpp` (`gpu_list_blocker`) |
+| Секрет URL і `passphrase` поза JSON; чужий профіль не втрачає секрет | `src/profile.cpp` | `tests/test_profile.cpp` |
+| Час черги без паузи `--pace`; нуль зразків не входить у бюджет | `src/latency.hpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
+| HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
 | Одне вікно Qt: профіль, джерело, вихід, GPU, старт/стоп, згорнутий бенчмарк | `src/gui/` | `gui_self_check` з `QT_QPA_PLATFORM=offscreen`, якщо зібрано Qt 6 |

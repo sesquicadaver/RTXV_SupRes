@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace rtx {
 
@@ -22,6 +24,13 @@ struct ProfileEndpoint {
   std::string payload;
   std::string directory;
   std::string credential_id;
+  std::string app;
+  std::string playpath;
+  std::string sdp;
+  int rtp_port_min = -1;
+  int rtp_port_max = -1;
+  int rtcp_port = -1;
+  std::vector<std::pair<std::string, std::string>> params;
 };
 
 struct Profile {
@@ -42,6 +51,9 @@ struct UrlSecret {
   std::string user;
   std::string password;
   bool has_password = false;
+  std::vector<std::pair<std::string, std::string>> query_secrets;
+
+  bool has_secret() const { return has_password || !query_secrets.empty(); }
 };
 
 UrlSecret split_url_secret(const std::string& url);
@@ -52,9 +64,14 @@ bool parse_profile(const std::string& text, Profile& profile, std::string& error
 bool save_profile_file(const std::filesystem::path& path, const Profile& profile, std::string& error);
 bool load_profile_file(const std::filesystem::path& path, Profile& profile, std::string& error);
 
-// Пароль іде в SecretStore. У JSON лишається URL без userinfo і credential_id.
+// Пароль і секретні параметри URL ідуть у SecretStore. У JSON лишається адреса без них.
 bool seal_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id, SecretStore& store,
                        std::string& error);
+// drop_owned видаляє kept_credential лише коли перезаписується профіль, який ним володіє.
+// Підготовка іншого файлу (сеанс, «Зберегти як») передає false і не чіпає чужий секрет.
+bool commit_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id,
+                         const std::string& kept_url, const std::string& kept_credential, bool drop_owned,
+                         SecretStore& store, std::string& error);
 bool open_input_secret(Profile& profile, SecretStore& store, std::string& error);
 
 void apply_profile(const Profile& profile, Settings& settings);

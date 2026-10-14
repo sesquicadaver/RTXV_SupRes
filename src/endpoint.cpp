@@ -541,6 +541,17 @@ std::string port_caption(Direction direction, Role role) {
 }
 
 std::string consumer_address(const Endpoint& endpoint) {
+  if (endpoint.protocol == "hls" && endpoint.role == "server") {
+    const std::string host = endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host;
+    if (endpoint.local_port < 1) {
+      return {};
+    }
+    std::string path = endpoint.path.empty() ? "/index.m3u8" : endpoint.path;
+    if (path.front() != '/') {
+      path.insert(path.begin(), '/');
+    }
+    return "http://" + host + ":" + std::to_string(endpoint.local_port) + path;
+  }
   std::string url = endpoint.url;
   const auto scheme = url.find("://");
   if (scheme != std::string::npos) {

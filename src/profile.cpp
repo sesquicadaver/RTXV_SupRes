@@ -8,6 +8,36 @@
 namespace rtx {
 namespace {
 
+bool secret_parameter(const std::string& key) {
+  return key == "passphrase" || key == "password" || key == "secret" || key == "token";
+}
+
+std::string params_json(const std::vector<std::pair<std::string, std::string>>& params) {
+  std::ostringstream out;
+  out << '[';
+  for (std::size_t i = 0; i < params.size(); ++i) {
+    if (i != 0) {
+      out << ',';
+    }
+    out << '"' << json_escape(params[i].first + "=" + params[i].second) << '"';
+  }
+  out << ']';
+  return out.str();
+}
+
+void read_params(const Json& json, std::vector<std::pair<std::string, std::string>>& params) {
+  const Json* node = json.find("params");
+  if (node == nullptr || node->kind != Json::Kind::Array) {
+    return;
+  }
+  for (const Json& item : node->array) {
+    const auto split = item.text.find('=');
+    if (item.kind == Json::Kind::String && split != std::string::npos && split > 0) {
+      params.emplace_back(item.text.substr(0, split), item.text.substr(split + 1));
+    }
+  }
+}
+
 std::string endpoint_json(const ProfileEndpoint& endpoint) {
   std::ostringstream out;
   out << "{\"protocol\":\"" << json_escape(endpoint.protocol) << "\",\"role\":\"" << json_escape(endpoint.role)
@@ -15,7 +45,11 @@ std::string endpoint_json(const ProfileEndpoint& endpoint) {
       << "\",\"remote_port\":" << endpoint.remote_port << ",\"local_host\":\"" << json_escape(endpoint.local_host)
       << "\",\"local_port\":" << endpoint.local_port << ",\"path\":\"" << json_escape(endpoint.path)
       << "\",\"payload\":\"" << json_escape(endpoint.payload) << "\",\"directory\":\""
-      << json_escape(endpoint.directory) << "\",\"credential_id\":\"" << json_escape(endpoint.credential_id) << "\"}";
+      << json_escape(endpoint.directory) << "\",\"app\":\"" << json_escape(endpoint.app) << "\",\"playpath\":\""
+      << json_escape(endpoint.playpath) << "\",\"sdp\":\"" << json_escape(endpoint.sdp)
+      << "\",\"rtp_port_min\":" << endpoint.rtp_port_min << ",\"rtp_port_max\":" << endpoint.rtp_port_max
+      << ",\"rtcp_port\":" << endpoint.rtcp_port << ",\"params\":" << params_json(endpoint.params)
+      << ",\"credential_id\":\"" << json_escape(endpoint.credential_id) << "\"}";
   return out.str();
 }
 
@@ -32,6 +66,13 @@ ProfileEndpoint endpoint_from_json(const Json& json) {
   endpoint.payload = json.text_or("payload", {});
   endpoint.directory = json.text_or("directory", {});
   endpoint.credential_id = json.text_or("credential_id", {});
+  endpoint.app = json.text_or("app", {});
+  endpoint.playpath = json.text_or("playpath", {});
+  endpoint.sdp = json.text_or("sdp", {});
+  endpoint.rtp_port_min = json.int_or("rtp_port_min", -1);
+  endpoint.rtp_port_max = json.int_or("rtp_port_max", -1);
+  endpoint.rtcp_port = json.int_or("rtcp_port", -1);
+  read_params(json, endpoint.params);
   return endpoint;
 }
 
@@ -46,6 +87,13 @@ void copy_endpoint(const ProfileEndpoint& profile, Endpoint& endpoint) {
   endpoint.path = profile.path;
   endpoint.payload = profile.payload;
   endpoint.directory = profile.directory;
+  endpoint.app = profile.app;
+  endpoint.playpath = profile.playpath;
+  endpoint.sdp = profile.sdp;
+  endpoint.rtp_port_min = profile.rtp_port_min;
+  endpoint.rtp_port_max = profile.rtp_port_max;
+  endpoint.rtcp_port = profile.rtcp_port;
+  endpoint.params = profile.params;
 }
 
 ProfileEndpoint capture_endpoint(const Endpoint& endpoint) {
@@ -60,7 +108,71 @@ ProfileEndpoint capture_endpoint(const Endpoint& endpoint) {
   profile.path = endpoint.path;
   profile.payload = endpoint.payload;
   profile.directory = endpoint.directory;
+  profile.app = endpoint.app;
+  profile.playpath = endpoint.playpath;
+  profile.sdp = endpoint.sdp;
+  profile.rtp_port_min = endpoint.rtp_port_min;
+  profile.rtp_port_max = endpoint.rtp_port_max;
+  profile.rtcp_port = endpoint.rtcp_port;
+  profile.params = endpoint.params;
   return profile;
+}
+
+std::vector<std::pair<std::string, std::string>> take_secret_params(
+    std::vector<std::pair<std::string, std::string>>& params) {
+  std::vector<std::pair<std::string, std::string>> secrets;
+  std::vector<std::pair<std::string, std::string>> kept;
+  for (const auto& param : params) {
+    if (secret_parameter(param.first)) {
+      secrets.push_back(param);
+    } else {
+      kept.push_back(param);
+    }
+  }
+  params = std::move(kept);
+  return secrets;
+}
+
+std::string encode_secret_blob(const std::string& password,
+                               const std::vector<std::pair<std::string, std::string>>& query,
+                               const std::vector<std::pair<std::string, std::string>>& input_params,
+                               const std::vector<std::pair<std::string, std::string>>& output_params) {
+  if (query.empty() && input_params.empty() && output_params.empty()) {
+    return password;
+  }
+  const auto object = [](const std::vector<std::pair<std::string, std::string>>& values) {
+    std::ostringstream out;
+    out << '{';
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      if (i != 0) {
+        out << ',';
+      }
+      out << '"' << json_escape(values[i].first) << "\":\"" << json_escape(values[i].second) << '"';
+    }
+    out << '}';
+    return out.str();
+  };
+  return std::string("{\"password\":\"") + json_escape(password) + "\",\"query\":" + object(query) +
+         ",\"input_params\":" + object(input_params) + ",\"output_params\":" + object(output_params) + "}";
+}
+
+void restore_param_object(const Json* node, std::vector<std::pair<std::string, std::string>>& params) {
+  if (node == nullptr || node->kind != Json::Kind::Object) {
+    return;
+  }
+  for (const auto& item : node->object) {
+    if (item.second.kind == Json::Kind::String) {
+      params.emplace_back(item.first, item.second.text);
+    }
+  }
+}
+
+std::string append_query(std::string url, const std::vector<std::pair<std::string, std::string>>& query) {
+  for (const auto& item : query) {
+    url += (url.find('?') == std::string::npos ? '?' : '&');
+    url += item.first + "=" + item.second;
+  }
+  return url;
 }
 
 bool atomic_write(const std::filesystem::path& path, const std::string& body, std::string& error) {
@@ -100,21 +212,48 @@ UrlSecret split_url_secret(const std::string& url) {
     return result;
   }
   const std::size_t authority = scheme + 3;
-  const auto slash = url.find('/', authority);
+  const auto boundary = url.find_first_of("/?", authority);
   const auto at = url.find('@', authority);
-  if (at == std::string::npos || (slash != std::string::npos && at > slash)) {
+  if (at != std::string::npos && (boundary == std::string::npos || at < boundary)) {
+    const std::string userinfo = url.substr(authority, at - authority);
+    const auto colon = userinfo.find(':');
+    if (colon == std::string::npos) {
+      result.user = userinfo;
+    } else {
+      result.user = userinfo.substr(0, colon);
+      result.password = userinfo.substr(colon + 1);
+      result.has_password = true;
+    }
+    result.url = url.substr(0, authority) + url.substr(at + 1);
+  }
+  const auto query = result.url.find('?');
+  if (query == std::string::npos) {
     return result;
   }
-  const std::string userinfo = url.substr(authority, at - authority);
-  const auto colon = userinfo.find(':');
-  if (colon == std::string::npos) {
-    result.user = userinfo;
-  } else {
-    result.user = userinfo.substr(0, colon);
-    result.password = userinfo.substr(colon + 1);
-    result.has_password = true;
+  const std::string base = result.url.substr(0, query);
+  std::string kept;
+  std::size_t start = query + 1;
+  while (start <= result.url.size()) {
+    const auto amp = result.url.find('&', start);
+    const auto end = amp == std::string::npos ? result.url.size() : amp;
+    const std::string piece = result.url.substr(start, end - start);
+    const auto eq = piece.find('=');
+    const std::string key = eq == std::string::npos ? piece : piece.substr(0, eq);
+    const std::string value = eq == std::string::npos ? std::string{} : piece.substr(eq + 1);
+    if (secret_parameter(key)) {
+      result.query_secrets.emplace_back(key, value);
+    } else if (!piece.empty()) {
+      if (!kept.empty()) {
+        kept += '&';
+      }
+      kept += piece;
+    }
+    if (amp == std::string::npos) {
+      break;
+    }
+    start = amp + 1;
   }
-  result.url = url.substr(0, authority) + url.substr(at + 1);
+  result.url = kept.empty() ? base : base + "?" + kept;
   return result;
 }
 
@@ -192,13 +331,29 @@ bool load_profile_file(const std::filesystem::path& path, Profile& profile, std:
 
 bool seal_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id, SecretStore& store,
                        std::string& error) {
+  return commit_input_secret(profile, raw_url, secret_id, "", profile.input.credential_id, true, store, error);
+}
+
+bool commit_input_secret(Profile& profile, const std::string& raw_url, const std::string& secret_id,
+                         const std::string& kept_url, const std::string& kept_credential, bool drop_owned,
+                         SecretStore& store, std::string& error) {
+  const std::string owned_credential = kept_credential;
+  const auto input_secrets = take_secret_params(profile.input.params);
+  const auto output_secrets = take_secret_params(profile.output.params);
   const UrlSecret parts = split_url_secret(raw_url);
-  profile.input.url = parts.has_password ? join_url_secret(parts.url, parts.user, {}) : parts.url;
-  if (!parts.has_password) {
-    if (!profile.input.credential_id.empty()) {
-      store.remove(profile.input.credential_id, error);
+  const bool material = parts.has_secret() || !input_secrets.empty() || !output_secrets.empty();
+  if (!material) {
+    if (raw_url == kept_url && !owned_credential.empty()) {
+      profile.input.url = kept_url;
+      profile.input.credential_id = owned_credential;
+      error.clear();
+      return true;
     }
+    profile.input.url = parts.url;
     profile.input.credential_id.clear();
+    if (drop_owned && !owned_credential.empty()) {
+      store.remove(owned_credential, error);
+    }
     error.clear();
     return true;
   }
@@ -206,10 +361,15 @@ bool seal_input_secret(Profile& profile, const std::string& raw_url, const std::
     error = "немає ідентифікатора для сховища облікових даних";
     return false;
   }
-  if (!store.save(secret_id, parts.password, error)) {
+  const std::string blob = encode_secret_blob(parts.password, parts.query_secrets, input_secrets, output_secrets);
+  if (!store.save(secret_id, blob, error)) {
     return false;
   }
+  profile.input.url = parts.user.empty() ? parts.url : join_url_secret(parts.url, parts.user, {});
   profile.input.credential_id = secret_id;
+  if (drop_owned && !owned_credential.empty() && owned_credential != secret_id) {
+    store.remove(owned_credential, error);
+  }
   error.clear();
   return true;
 }
@@ -219,12 +379,28 @@ bool open_input_secret(Profile& profile, SecretStore& store, std::string& error)
     error.clear();
     return true;
   }
-  std::string password;
-  if (!store.load(profile.input.credential_id, password, error)) {
+  std::string blob;
+  if (!store.load(profile.input.credential_id, blob, error)) {
     return false;
   }
+  std::string password = blob;
+  std::vector<std::pair<std::string, std::string>> query;
+  std::vector<std::pair<std::string, std::string>> input_params;
+  std::vector<std::pair<std::string, std::string>> output_params;
+  if (!blob.empty() && blob.front() == '{') {
+    Json json;
+    if (!parse_json(blob, json, error)) {
+      return false;
+    }
+    password = json.text_or("password", {});
+    restore_param_object(json.find("query"), query);
+    restore_param_object(json.find("input_params"), input_params);
+    restore_param_object(json.find("output_params"), output_params);
+  }
   const UrlSecret parts = split_url_secret(profile.input.url);
-  profile.input.url = join_url_secret(parts.url, parts.user, password);
+  profile.input.url = append_query(join_url_secret(parts.url, parts.user, password), query);
+  profile.input.params.insert(profile.input.params.end(), input_params.begin(), input_params.end());
+  profile.output.params.insert(profile.output.params.end(), output_params.begin(), output_params.end());
   error.clear();
   return true;
 }
