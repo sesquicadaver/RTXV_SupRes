@@ -7,8 +7,8 @@
 | HTTP `listen` і RTMP `rtmp_listen` як AVOption, не query URL | `src/endpoint.cpp`, `src/pipeline.cpp` | `tests/test_endpoint.cpp`, `tests/test_transport.cpp` |
 | MPEG-TS over RTP: муксер `rtp_mpegts`, демуксер `rtp`, пакет PT 33 | `src/catalog.cpp`, `src/pipeline.cpp` | `tests/test_catalog.cpp`, `tests/test_rtp_mpegts.cpp` |
 | Вхід і вихід незалежні, протоколи можуть відрізнятися | `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_run_without_sdk.cpp` |
-| NVDEC → RTX Video SDK → NVENC, кадр лишається на GPU | `src/pipeline.cpp`, `src/gpu/rtx_processor.cu` | збірка з `RTX_VIDEO_SDK_ROOT` на цільовій машині |
-| Вихідний CUDA-масив із `CUDA_ARRAY3D_SURFACE_LDST` | `src/gpu/rtx_processor.cu` | компіляція `.cu` на машині з CUDA; виконання на GPU цільової машини |
+| NVDEC → RTX Video SDK → NVENC, кадр лишається на GPU | `src/pipeline.cpp`, `src/gpu/rtx_processor.cu` | збірка з `RTX_VIDEO_SDK_ROOT` і CUDA 12.x; виконання на GPU NVIDIA |
+| Вихідний CUDA-масив із `CUDA_ARRAY3D_SURFACE_LDST` | `src/gpu/rtx_processor.cu` | компіляція `.cu` з CUDA Toolkit; виконання на GPU NVIDIA |
 | Перерахунок PTS між time_base, пропуски й розриви | `src/timestamps.cpp` | `tests/test_timestamps.cpp` |
 | Перевірка GPU можливостями SDK, не зашитим списком | `src/gpu_probe.cpp`, `probe_rtx_sdk` | `doctor` створює ефект лише коли SDK зібрано; інакше код 3 |
 | Адаптивна якість за повним часом кадру | `src/adaptive.cpp`, `src/pipeline.cpp` | `tests/test_adaptive.cpp` |
@@ -16,7 +16,7 @@
 | Перевантаження без росту черги | `src/mailbox.hpp` | `tests/test_mailbox.cpp` |
 | Відмова VSR не обриває потік: резервний масштаб того ж розміру | `src/gpu/rtx_processor.cu`, `src/pipeline.cpp` | виконання на GPU; `vsr_state=bypass` |
 | Колір з метаданих кадру | `src/color.cpp` | `tests/test_color.cpp` |
-| NVENC без B-кадрів і lookahead | `configure_nvenc` у `src/pipeline.cpp` | перегляд параметрів; виконання на GPU цільової машини |
+| NVENC без B-кадрів і lookahead | `configure_nvenc` у `src/pipeline.cpp` | параметри кодера; виконання на GPU NVIDIA |
 | Метрики FPS, пропуски, повний час, стан VSR | `src/metrics.cpp`, цикл у `src/pipeline.cpp` | `tests/test_metrics.cpp` |
 | Відмова без SDK замість підміни ефекту | `src/processor_factory.cpp` | `tests/test_run_without_sdk.cpp` |
 | Збірка Win32 без POSIX-сокетів | `src/platform.hpp`, `src/hls_server.cpp` | job `windows` у `.github/workflows/ci.yml` |
@@ -34,4 +34,4 @@
 | HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
 | Одне вікно Qt: профіль, джерело, вихід, GPU, старт/стоп, згорнутий бенчмарк | `src/gui/` | `gui_self_check` з `QT_QPA_PLATFORM=offscreen`, якщо зібрано Qt 6 |
-| Реліз Windows 11 x64: Inno Setup, перевірка без CUDA і без VC++ Runtime, кадр лише після VSR без bypass | `packaging/rtx-vsr.iss`, `src/precheck_rules.cpp`, `src/install_check.cpp`, `CMakeLists.txt` | `tests/test_precheck.cpp`, `tests/test_install_check.cpp`; ISCC, чиста Windows і живий VSR — на машині пакування |
+| Реліз Windows 11 x64: Inno Setup, перевірка без CUDA і без VC++ Runtime, кадр лише після VSR без bypass | `packaging/rtx-vsr.iss`, `src/precheck_rules.cpp`, `src/install_check.cpp`, `CMakeLists.txt` | `tests/test_precheck.cpp`, `tests/test_install_check.cpp`; пакет збирає `ISCC` на Windows |

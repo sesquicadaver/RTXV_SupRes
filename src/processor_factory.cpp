@@ -37,7 +37,7 @@ DependencyReport inspect_dependencies() {
 #else
   report.sdk_built = false;
   report.sdk_note =
-      "бінарник зібрано без RTX Video SDK; на цільовій машині потрібні CUDA Toolkit 12.x і RTX_VIDEO_SDK_ROOT";
+      "бінарник зібрано без RTX Video SDK; потрібні CUDA Toolkit 12.x і RTX_VIDEO_SDK_ROOT";
 #endif
   return report;
 }
