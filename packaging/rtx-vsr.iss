@@ -230,8 +230,8 @@ begin
   RegWriteStringValue(HKLM, 'Software\RTX VSR', 'ResumePhase', Phase);
   ScheduleResume;
   NeedsRestart := True;
-  { Прапорець перезапуску сам setup знову не запускає. RunOnce робить це після входу. }
-  Result := 'потрібен перезапуск, щоб продовжити встановлення';
+  { HKLM RunOnce виконується лише коли після перезапуску входить адміністратор. }
+  Result := 'потрібен перезапуск. Встановлення продовжиться після входу адміністратора. Вхід звичайного користувача setup не запускає';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

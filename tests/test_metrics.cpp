@@ -37,6 +37,7 @@ int main() {
   std::string body;
   std::getline(written, body);
   CHECK(body.find("\"frames_in\":2") != std::string::npos);
+  written.close();
   std::filesystem::remove(path);
   return rtx_test::result();
 }

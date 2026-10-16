@@ -1221,11 +1221,16 @@ void Window::start_benchmark() {
     status_->setText("Для порівняння потрібен однаковий запис");
     return;
   }
-  QString error;
   const QString path = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/benchmark.json";
   QDir().mkpath(QFileInfo(path).path());
-  if (!write_profile(path, error, false)) {
-    status_->setText(error);
+  rtx::Profile profile = profile_from_form();
+  profile.input = {};
+  profile.input.protocol = "file";
+  profile.input.role = "client";
+  profile.input.path = bench_file_->text().trimmed().toStdString();
+  std::string failure = rtx::password_access_error(profile);
+  if (!failure.empty() || !rtx::save_profile_file(path.toStdString(), profile, failure)) {
+    status_->setText(QString::fromStdString(failure));
     return;
   }
   bench_profile_ = path;
@@ -1288,13 +1293,7 @@ void Window::run_next_benchmark() {
                    "--warmup",
                    QString::number(bench_warmup_->value()),
                    "--metrics-interval",
-                   "0",
-                   "--input-protocol",
-                   "file",
-                   "--input-role",
-                   "client",
-                   "--input-path",
-                   bench_file_->text()};
+                   "0"};
   if (!job.gpu_uuid.isEmpty()) {
     args << "--gpu-uuid" << job.gpu_uuid;
   }

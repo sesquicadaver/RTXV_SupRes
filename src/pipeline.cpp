@@ -721,7 +721,8 @@ struct Session {
   }
 
   void pace_owned_frame(AVFrame* frame) {
-    const auto now = std::chrono::steady_clock::now();
+    using clock = std::chrono::steady_clock;
+    const auto now = clock::now();
     if (!pace_origin_set) {
       pace_origin = now;
       pace_next = now;
@@ -729,13 +730,16 @@ struct Session {
       pace_origin_set = true;
       return;
     }
-    auto target = pace_next + std::chrono::duration<double, std::milli>(budget_ms);
+    const auto step = [](double milliseconds) {
+      return std::chrono::duration_cast<clock::duration>(std::chrono::duration<double, std::milli>(milliseconds));
+    };
+    clock::time_point target = pace_next + step(budget_ms);
     if (frame->pts != AV_NOPTS_VALUE && pace_origin_pts != AV_NOPTS_VALUE && frame->pts > pace_origin_pts &&
         input_tb.den > 0) {
       const double delay_ms = av_q2d(input_tb) * static_cast<double>(frame->pts - pace_origin_pts) * 1000.0;
-      target = pace_origin + std::chrono::duration<double, std::milli>(delay_ms);
+      target = pace_origin + step(delay_ms);
     }
-    while (running.load() && std::chrono::steady_clock::now() < target) {
+    while (running.load() && clock::now() < target) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     pace_next = target;
