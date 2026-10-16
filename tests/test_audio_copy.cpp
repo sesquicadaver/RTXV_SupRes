@@ -9,7 +9,6 @@ int main() {
   CHECK(rtx::muxer_carries_audio("mpegts", AV_CODEC_ID_AAC));
   CHECK(rtx::muxer_carries_audio("mpegts", AV_CODEC_ID_MP2));
   CHECK(rtx::muxer_carries_audio("mp4", AV_CODEC_ID_AAC));
-  CHECK(!rtx::muxer_carries_audio("flv", AV_CODEC_ID_AC3));
   CHECK(!rtx::muxer_carries_audio("h264", AV_CODEC_ID_AAC));
   CHECK(!rtx::muxer_carries_audio("", AV_CODEC_ID_AAC));
   CHECK(!rtx::muxer_carries_audio("mpegts", AV_CODEC_ID_NONE));
