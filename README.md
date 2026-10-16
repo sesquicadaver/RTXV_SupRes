@@ -9,7 +9,19 @@
 
 ## Збірка
 
-Штатний продуктовий компілятор — MSVC x64. Для розробки без пакета потрібні Qt 6 Widgets, FFmpeg і, для ефекту VSR, CUDA Toolkit 12.x. Без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
+Штатний продуктовий компілятор — MSVC x64. На Windows 11 x64 пакети збірки ставить уже наявний PowerShell:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging\setup_build.ps1
+```
+
+Скрипт перевіряє систему і пропускає те, що вже стоїть: PowerShell, winget, MSVC 2022, CMake, Python, CUDA Toolkit 12.x, Qt 6, FFmpeg і Inno Setup. Git не потрібен і не ставиться. Драйвер NVIDIA не запускається і не оновлюється. CUDA 13 не ставиться. Якщо Toolkit 12.x немає, завантажується 12.6.3 без компонента `Display.Driver`. Якщо немає FFmpeg з `include/` і `lib/`, завантажується готова збірка LGPL shared 7.1. Відсутні решта пакети ставляться по одному: Build Tools 2022, CMake, Qt 6.8 для MSVC і Inno Setup. Python з’являється лише коли немає ні його, ні Qt. RTX Video SDK скрипт не завантажує: його беруть з кабінету NVIDIA, розпаковують і задають `RTX_VIDEO_SDK_ROOT`. Повторний запуск тоді завершується кодом 0. Код 2 означає, що інструменти готові, а SDK ще немає.
+
+```powershell
+. "$env:LOCALAPPDATA\rtx-vsr-build\build-env.ps1"
+```
+
+Далі в тому самому вікні. Без pkg-config корінь FFmpeg — `FFMPEG_ROOT` з `include/` та `lib/`.
 
 ```bat
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -97,6 +109,8 @@ rtx-vsr-proxy.exe run ^
 Якщо `rtx_video_api_cuda_evaluate` падає, потік не обривається: кадр масштабується на GPU до вже відкритого розміру кодера, `vsr_state` стає `bypass`.
 
 NVENC: без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`, preset `llhp` або `ull`. Матриця кольору береться з метаданих кадру (інакше BT.709 для HD і BT.601 для SD), limited або full.
+
+Якщо у вході є аудіо і муксер виходу приймає його кодек, пакети копіюються без перекодування. До відкриття виходу тримається не більше 64 пакетів. Елементарний RTP і сирий H.264/H.265 аудіо не несуть. Береться один найкращий аудіопотік.
 
 Події стану й метрики — окремі рядки JSON на stdout. Журнал FFmpeg лишається на stderr. Штатна зупинка: рядок `stop` на stdin, або SIGINT/SIGTERM. Стан: `connecting`, `waiting`, `running`, `overloaded`, `bypass`, `error`, `stopped`.
 
