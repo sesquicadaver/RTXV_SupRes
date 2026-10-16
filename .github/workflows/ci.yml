@@ -5,20 +5,6 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install FFmpeg development libraries
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libavformat-dev libavcodec-dev libavutil-dev qt6-base-dev
-      - name: Configure, build, test
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j"$(nproc)"
-          ctest --test-dir build --output-on-failure
-          ./build/rtx-vsr-proxy capabilities --json > /tmp/modes.json
-          python3 -c 'import json; d=json.load(open("/tmp/modes.json")); assert d["modes"]; assert all(m["protocol"]!="gopher" for m in d["modes"]); rtp=[m for m in d["modes"] if m["protocol"]=="rtp" and m["direction"]=="output"]; assert {m["container"] for m in rtp}=={"rtp_mpegts","rtp"}'
-
   windows:
     runs-on: windows-latest
     steps:
@@ -39,30 +25,6 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
           ctest --test-dir build --output-on-failure
-
-  cuda-compile:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Compile and link the CUDA translation unit without a GPU
-        run: |
-          docker run --rm -v "$PWD":/src -w /src nvidia/cuda:12.6.3-devel-ubuntu22.04 bash -lc '
-            set -euo pipefail
-            apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y cmake pkg-config g++ libavformat-dev libavcodec-dev libavutil-dev
-            cmake -S . -B build-cuda -DCMAKE_BUILD_TYPE=Release -DRTX_CI_COMPILE_CHECK=ON
-            cmake --build build-cuda -j"$(nproc)"
-            stub=/usr/local/cuda/lib64/stubs
-            if [ ! -e "$stub/libcuda.so.1" ]; then ln -s "$stub/libcuda.so" "$stub/libcuda.so.1"; fi
-            export LD_LIBRARY_PATH="$stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            ctest --test-dir build-cuda --output-on-failure
-            set +e
-            ./build-cuda/rtx-vsr-proxy doctor > /tmp/doctor.txt
-            code=$?
-            set -e
-            cat /tmp/doctor.txt
-            test "$code" -eq 3
-            grep -q "не підтверджено" /tmp/doctor.txt
-          '
 
   windows-cuda:
     runs-on: windows-latest

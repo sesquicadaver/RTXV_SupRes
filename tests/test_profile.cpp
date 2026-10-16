@@ -1,4 +1,5 @@
 #include "check.hpp"
+#include "cli.hpp"
 #include "dependencies.hpp"
 #include "endpoint.hpp"
 #include "latency.hpp"
@@ -169,5 +170,17 @@ int main() {
                        rtx::rtp_container(mpegts_rtp, rtx::Direction::Input)) == nullptr);
   CHECK(rtx::find_mode(rtp_modes, rtx::Direction::Input, "rtp", "listener",
                        rtx::rtp_container(mpegts_rtp, rtx::Direction::Input)) != nullptr);
+
+  rtx::Endpoint saved;
+  saved.protocol = "rtsp";
+  saved.role = "client";
+  saved.url = "rtsp://192.168.1.20:554/live";
+  std::string overlay_error;
+  CHECK(rtx::overlay_endpoint_flags(saved, {{"local-port", "5600"}}, overlay_error));
+  CHECK(saved.protocol == "rtsp");
+  CHECK(saved.role == "client");
+  CHECK(saved.url == "rtsp://192.168.1.20:554/live");
+  CHECK(saved.local_port == 5600);
+  CHECK(!rtx::overlay_endpoint_flags(saved, {{"remote-port", "abc"}}, overlay_error));
   return rtx_test::result();
 }

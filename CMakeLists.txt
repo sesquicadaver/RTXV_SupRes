@@ -4,6 +4,11 @@ project(rtx-vsr-proxy LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Цільова платформа продукту — лише Windows x64. Це не залежить від RTX_PRODUCT_BUILD.
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "Збірка лише для Windows x64 (Windows 11). Інші платформи не підтримуються.")
+endif()
 if(MSVC)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
 endif()
@@ -171,6 +176,9 @@ foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk time
 endforeach()
 add_executable(test_precheck tests/test_precheck.cpp)
 target_link_libraries(test_precheck PRIVATE rtx_precheck)
+if(MSVC)
+  set_target_properties(test_precheck PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 add_test(NAME precheck COMMAND test_precheck)
 set_tests_properties(run_without_sdk transport rtp_mpegts PROPERTIES TIMEOUT 20)
 

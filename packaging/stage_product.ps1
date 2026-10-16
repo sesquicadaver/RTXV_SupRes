@@ -75,6 +75,9 @@ if ($nvidiaNote -notmatch "SDK_VERSION=\S+") {
   Fail "NVIDIA_RUNTIME.txt має містити SDK_VERSION використаного SDK"
 }
 
+if (Test-Path -LiteralPath $Dist) {
+  Remove-Item -LiteralPath $Dist -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 foreach ($exe in @("rtx-vsr-proxy.exe", "rtx-vsr-gui.exe", "rtx-vsr-precheck.exe")) {
   $source = Join-Path $BuildDir $exe
@@ -92,6 +95,9 @@ if (-not $deploy) {
   Fail "потрібен windeployqt тієї самої збірки Qt"
 }
 & windeployqt --release --no-translations (Join-Path $Dist "rtx-vsr-gui.exe")
+if ($LASTEXITCODE -ne 0) {
+  Fail "windeployqt завершився з кодом $LASTEXITCODE"
+}
 if (-not (Test-Path (Join-Path $Dist "platforms\qwindows.dll"))) {
   Fail "windeployqt не поклав platforms\qwindows.dll"
 }

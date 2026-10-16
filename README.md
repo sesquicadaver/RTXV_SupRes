@@ -5,25 +5,27 @@
 
 Ефект VSR з'являється у збірці з `RTX_VIDEO_SDK_ROOT` і CUDA Toolkit 12.x. `doctor` підтверджує його лише після створення ефекту SDK на GPU NVIDIA.
 
+Ціль — лише **Windows 11 x64**. CMake відхиляє іншу платформу незалежно від `RTX_PRODUCT_BUILD`. Linux не збирається і не є перевіркою цього продукту.
+
 ## Збірка
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure
-./build/rtx-vsr-proxy capabilities
-./build/rtx-vsr-proxy doctor --json
+Штатний продуктовий компілятор — MSVC x64. Для розробки без пакета потрібні Qt 6 Widgets, FFmpeg і, для ефекту VSR, CUDA Toolkit 12.x. Без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
+
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+build\Release\rtx-vsr-proxy.exe capabilities
+build\Release\rtx-vsr-proxy.exe doctor --json
 ```
 
-Якщо є Qt 6 Widgets, збирається `rtx-vsr-gui`: одне вікно з профілем, джерелом, виходом, GPU поруч із покращенням і згорнутою панеллю бенчмарку. Вікно керує `rtx-vsr-proxy` через `QProcess`; кадри лишаються в конвеєрі CLI. Перевірка без дисплея: `QT_QPA_PLATFORM=offscreen ./build/rtx-vsr-gui --self-check`.
+Якщо є Qt 6 Widgets, збирається `rtx-vsr-gui`: одне вікно з профілем, джерелом, виходом, GPU поруч із покращенням і згорнутою панеллю бенчмарку. Вікно керує `rtx-vsr-proxy` через `QProcess`; кадри лишаються в конвеєрі CLI. Перевірка без дисплея: `set QT_QPA_PLATFORM=offscreen` і `build\Release\rtx-vsr-gui.exe --self-check`.
 
 Тести не використовують `assert`, тож Release із `NDEBUG` їх не вимикає.
 
-## Збірка на Windows
+MSYS2 UCRT64 у CI — лише перевірка компіляції Windows-коду без інсталятора. Це не шлях релізу. Реліз вимагає MSVC.
 
-Штатний шлях CI — MSYS2 UCRT64: `gcc`, `cmake`, `pkgconf`, `ffmpeg`. Сокети HLS, `process_id` і `SIGPIPE` мають окремі гілки для Win32; для MSVC без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
-
-Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x (Linux-образ 12.6 і Windows MSVC+nvcc). Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить. Для релізного пакета цей прапорець заборонений.
+Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x і MSVC+nvcc. Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить. Для релізного пакета цей прапорець заборонений.
 
 ## Пакет Windows 11 x64
 
@@ -37,7 +39,7 @@ powershell -File packaging\stage_product.ps1 -BuildDir build -FfmpegBin C:\ffmpe
 
 `RTX_PRODUCT_BUILD` завершується помилкою без Windows x64, MSVC, Qt 6 Widgets, справжнього RTX Video SDK, `nvsdk_ngx`, CUDA і явного списку архітектур. `CMAKE_CUDA_ARCHITECTURES=OFF` теж відхиляється. `RTX_CI_COMPILE_CHECK` разом із ним заборонений. Маркер `rtx-product-build.txt` лежить у каталозі CMake (`build`), виконувані файли скрипт бере звідти або з `build\Release`. `ISCC packaging\rtx-vsr.iss` збирає `packaging\output\rtx-vsr-setup.exe`; рядок `SignTool` у скрипті закоментований, доки немає сертифіката.
 
-Перед копіюванням файлів `rtx-vsr-precheck.exe` дивиться версію Windows, x64, місце на диску і запущені копії програми. Адаптер і версію його драйвера він читає через SetupAPI (`ProviderName` і `DriverVersion`), без CUDA і без припущення про `System32\drivers`. Збірка precheck лінкує статичний CRT (`/MT`), тож на чистій Windows вона стартує до встановлення VC++ Runtime. Runtime x64 ставиться лише якщо збірка відсутня або старіша; новіша сумісна лишається. Сумісний драйвер не чіпається, і тоді мережа не потрібна. Якщо драйвер треба поставити, достатньо `driver_url` і `driver_sha256` у маніфесті або локального пакета `-NvidiaDriver`. Невідомий або OEM-адаптер поза `supported_device_ids` дає повідомлення і не отримує приблизний драйвер. Завантажений або локальний драйвер і VC++ Runtime перевіряються підписом і SHA-256. Код 3010 повертає текст і `NeedsRestart`, тому Inno зупиняє копіювання, перезапускає комп'ютер і знову запускає цей setup. Якщо коротка перевірка після копіювання не проходить, повертаються файли саме цієї спроби з `{commonappdata}\RTX VSR\backup-<id>`, а встановлення завершується помилкою. Якщо копія не збіглася з ідентифікатором спроби, успіх не повідомляється. Профілі в каталозі користувача не входять у каталог програми.
+Перед копіюванням файлів `rtx-vsr-precheck.exe` дивиться версію Windows, x64, місце на диску і запущені копії програми. Адаптер і версію його драйвера він читає через SetupAPI (`ProviderName` і `DriverVersion`), без CUDA і без припущення про `System32\drivers`. Збірка precheck лінкує статичний CRT (`/MT`), тож на чистій Windows вона стартує до встановлення VC++ Runtime. Runtime x64 ставиться лише якщо збірка відсутня або старіша; новіша сумісна лишається. Сумісний драйвер не чіпається, і тоді мережа не потрібна. Якщо драйвер треба поставити, достатньо `driver_url` і `driver_sha256` у маніфесті або локального пакета `-NvidiaDriver`. Невідомий або OEM-адаптер поза `supported_device_ids` дає повідомлення і не отримує приблизний драйвер. Завантажений або локальний драйвер і VC++ Runtime перевіряються підписом і SHA-256. Код 3010 повертає текст і `NeedsRestart`. Inno зупиняє копіювання і перезапускає комп'ютер. Повторний запуск setup після входу дає ключ RunOnce `RTXVSRSetupResume`; сам прапорець перезапуску інсталятор не запускає. `ResumePhase` не дає зациклити ту саму фазу. Помилка `doctor` або `install-check` після копіювання ставить код виходу 1 через `GetCustomSetupExitCode`. Якщо коротка перевірка після копіювання не проходить, повертаються файли саме цієї спроби з `{commonappdata}\RTX VSR\backup-<id>`, а встановлення завершується помилкою. Якщо копія не збіглася з ідентифікатором спроби, успіх не повідомляється. Профілі в каталозі користувача не входять у каталог програми.
 
 `rtx-vsr-proxy install-check --clip install-check.h264` для кожного GPU за UUID декодує запис, проганяє VSR, кодує і приймає результат лише коли є кадр VSR і не було `bypass`. Кадр після резервного масштабу перевірку не проходить. Це не вимір FPV-затримки. `doctor` лишається перевіркою залежностей; наявність `h264_nvenc` у FFmpeg його не замінює.
 
@@ -45,11 +47,11 @@ powershell -File packaging\stage_product.ps1 -BuildDir build -FfmpegBin C:\ffmpe
 
 ## Збірка з RTX Video SDK
 
-Потрібні Windows 10+, драйвер NVIDIA, CUDA Toolkit 12.x (SDK 1.1 несумісний із CUDA 13) і розпакований [RTX Video SDK](https://developer.nvidia.com/rtx-video-sdk).
+Потрібні Windows 11 x64, драйвер NVIDIA, CUDA Toolkit 12.x (SDK 1.1 несумісний із CUDA 13) і розпакований [RTX Video SDK](https://developer.nvidia.com/rtx-video-sdk).
 
-```bash
+```bat
 set RTX_VIDEO_SDK_ROOT=C:\path\to\RTX_Video_SDK
-cmake -S . -B build
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
@@ -74,15 +76,15 @@ RTSP додатково має `rtp_port_min` і `rtp_port_max` (локальн�
 
 HTTP-сервер — режим `http` + `server`. `listen=1` передається словником AVOption в `avio_open2`, не рядком запиту URL. HLS-сервер — окремий режим `hls` + `server`; читання запиту має таймаут 2 с.
 
-```bash
-./build/rtx-vsr-proxy run \
-  --input-protocol udp --input-role listener --input-local-port 5600 \
+```bat
+rtx-vsr-proxy.exe run ^
+  --input-protocol udp --input-role listener --input-local-port 5600 ^
   --output-protocol http --output-role server --output-local-host 127.0.0.1 --output-local-port 8080
 ```
 
-```bash
-./build/rtx-vsr-proxy run \
-  --input-protocol rtsp --input-role client --input-url rtsp://192.168.1.20:554/live \
+```bat
+rtx-vsr-proxy.exe run ^
+  --input-protocol rtsp --input-role client --input-url rtsp://192.168.1.20:554/live ^
   --output-protocol srt --output-role listener --output-local-port 9000
 ```
 
@@ -106,7 +108,7 @@ NVENC: без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`, preset
 
 ## Профіль
 
-Спільний JSON схеми 1 для CLI (`--profile`) і вікна. Запис атомарний. Сеанс відкривається лише за адресою і портом. Ім'я користувача, пароль і параметри `passphrase`, `password`, `secret`, `token` відхиляються. Протоколи, яким для з'єднання обов'язково потрібен обліковий запис (`ftp`, `sftp`, `smb`, `icecast`), у каталог не входять. Елементарний RTP на вході зберігає `payload=es`, тож CLI відкриває SDP, а не MPEG-TS. Роль, задана для джерела з URL, відновлюється під час завантаження. Профіль тримає SDP, `app`, `playpath`, обидва кінці SRT rendezvous, RTCP і додаткові параметри. Явні прапорці командного рядка перекривають профіль. URL і окремі поля адреси разом валідатор відхиляє. Відсутній UUID карти лишається невирішеним, доки користувач не обере іншу.
+Спільний JSON схеми 1 для CLI (`--profile`) і вікна. Запис атомарний. Сеанс відкривається лише за адресою і портом. Ім'я користувача, пароль і параметри `passphrase`, `password`, `secret`, `token` відхиляються. Протоколи, яким для з'єднання обов'язково потрібен обліковий запис (`ftp`, `sftp`, `smb`, `icecast`), у каталог не входять. Елементарний RTP на вході зберігає `payload=es`, тож CLI відкриває SDP, а не MPEG-TS. Роль, задана для джерела з URL, відновлюється під час завантаження. Профіль тримає SDP, `app`, `playpath`, обидва кінці SRT rendezvous, RTCP і додаткові параметри. Явний прапорець `--input-*` або `--output-*` перекриває лише це поле профілю. Протокол, роль і решта збереженого кінця лишаються. URL і окремі поля адреси разом валідатор відхиляє. Відсутній UUID карти лишається невирішеним, доки користувач не обере іншу.
 
 ## Бенчмарк
 

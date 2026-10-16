@@ -4,6 +4,13 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace rtx {
 namespace {
 
@@ -69,10 +76,19 @@ bool write_metrics_file(const std::string& path, const Metrics& metrics) {
     }
     file << metrics_json(metrics) << '\n';
   }
+#ifdef _WIN32
+  // Microsoft CRT: std::rename не замінює вже наявний файл призначення.
+  const BOOL replaced = MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+  if (replaced == 0) {
+    std::remove(tmp.c_str());
+    return false;
+  }
+#else
   if (std::rename(tmp.c_str(), path.c_str()) != 0) {
     std::remove(tmp.c_str());
     return false;
   }
+#endif
   return true;
 }
 

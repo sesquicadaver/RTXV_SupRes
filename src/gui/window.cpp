@@ -518,9 +518,12 @@ void Window::build() {
   });
   connect(profiles_, &QComboBox::currentIndexChanged, this, [this](int) {
     const QString path = profiles_->currentData().toString();
-    if (!path.isEmpty()) {
-      load_profile(path);
+    if (path.isEmpty()) {
+      profile_path_.clear();
+      mark_dirty();
+      return;
     }
+    load_profile(path);
   });
   connect(source_url_, &QRadioButton::toggled, this, [this](bool) { fill_roles(); });
   connect(input_protocol_, &QComboBox::currentIndexChanged, this, [this](int) { fill_roles(); });
@@ -529,8 +532,14 @@ void Window::build() {
   connect(output_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_local_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_path_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
-  connect(output_port_, &QSpinBox::valueChanged, this, [this](int) { update_consumer(); });
-  connect(output_local_port_, &QSpinBox::valueChanged, this, [this](int) { update_consumer(); });
+  connect(output_port_, &QSpinBox::valueChanged, this, [this](int) {
+    update_consumer();
+    mark_dirty();
+  });
+  connect(output_local_port_, &QSpinBox::valueChanged, this, [this](int) {
+    update_consumer();
+    mark_dirty();
+  });
   connect(copy, &QPushButton::clicked, this, [this] { QGuiApplication::clipboard()->setText(consumer_->text()); });
   connect(refresh_gpu_, &QPushButton::clicked, this, &Window::reload_gpus);
   connect(gpu_, &QComboBox::currentIndexChanged, this, [this](int index) {
@@ -572,6 +581,15 @@ void Window::build() {
   connect(scale_, &QComboBox::currentIndexChanged, this, [this](int) { mark_dirty(); });
   connect(quality_, &QComboBox::currentIndexChanged, this, [this](int) { mark_dirty(); });
   connect(quality_auto_, &QCheckBox::toggled, this, [this](bool) { mark_dirty(); });
+  const auto touch_port = [this](int) { mark_dirty(); };
+  connect(input_port_, &QSpinBox::valueChanged, this, touch_port);
+  connect(input_local_port_, &QSpinBox::valueChanged, this, touch_port);
+  connect(input_rtcp_, &QSpinBox::valueChanged, this, touch_port);
+  connect(input_rtp_min_, &QSpinBox::valueChanged, this, touch_port);
+  connect(input_rtp_max_, &QSpinBox::valueChanged, this, touch_port);
+  connect(output_rtcp_, &QSpinBox::valueChanged, this, touch_port);
+  connect(output_rtp_min_, &QSpinBox::valueChanged, this, touch_port);
+  connect(output_rtp_max_, &QSpinBox::valueChanged, this, touch_port);
   update_source_mode();
 }
 

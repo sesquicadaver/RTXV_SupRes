@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 extern "C" {
 #include <libavutil/log.h>
@@ -50,6 +52,7 @@ RTP: --input-payload і --output-payload mpegts (типово), h264, hevc аб�
 Якість за замовчуванням адаптивна, старт з рівня 2. Масштаб 2 або 3.
 Якщо масштаб 3 не вкладається в інтервал першого кадру, до відкриття виходу він падає до 2.
 Профіль схеми 1: --profile файл.json. Лише адреса і порт, без імені користувача і пароля.
+Прапорець --input-* або --output-* змінює лише це поле. Протокол, роль і решта збереженого кінця лишаються.
 Карта: --gpu-uuid або --gpu N. Порівняння запису: --pace і --warmup секунди; явне --quality вимикає адаптацію.
 Події стану й метрики — рядки JSON на stdout. Журнал FFmpeg лишається на stderr.
 Команда зупинки на stdin: stop
@@ -191,6 +194,18 @@ void fill_role_from_url(Endpoint& endpoint) {
 
 }  // namespace
 
+bool overlay_endpoint_flags(Endpoint& endpoint, const std::vector<std::pair<std::string, std::string>>& flags,
+                            std::string& error) {
+  for (const auto& flag : flags) {
+    if (!assign_endpoint_flag(endpoint, flag.first, flag.second)) {
+      error = flag.first;
+      return false;
+    }
+  }
+  error.clear();
+  return true;
+}
+
 int cli_main(int argc, char** argv) {
   if (argc < 2) {
     print_help();
@@ -211,9 +226,9 @@ int cli_main(int argc, char** argv) {
   bool explicit_gpu_uuid = false;
   bool explicit_codec = false;
   bool explicit_bitrate = false;
-  bool explicit_input = false;
-  bool explicit_output = false;
   bool explicit_warmup = false;
+  std::vector<std::pair<std::string, std::string>> input_flags;
+  std::vector<std::pair<std::string, std::string>> output_flags;
   std::string profile_path;
   std::string clip_path;
   std::string check_dir;
@@ -375,12 +390,12 @@ int cli_main(int argc, char** argv) {
       return 2;
     }
     const bool input = input_flag == 0;
-    if (input) {
-      explicit_input = true;
-    } else {
-      explicit_output = true;
-    }
     const std::string flag = arg.substr(input ? 8 : 9);
+    if (input) {
+      input_flags.emplace_back(flag, value);
+    } else {
+      output_flags.emplace_back(flag, value);
+    }
     Endpoint& endpoint = input ? settings.input : settings.output;
     if (!assign_endpoint_flag(endpoint, flag, value)) {
       std::cerr << "некоректне значення " << arg << '\n';
@@ -433,11 +448,13 @@ int cli_main(int argc, char** argv) {
     if (explicit_bitrate) {
       loaded.bitrate = settings.bitrate;
     }
-    if (explicit_input) {
-      loaded.input = settings.input;
+    if (!input_flags.empty() && !overlay_endpoint_flags(loaded.input, input_flags, error)) {
+      std::cerr << "некоректне значення --input-" << error << '\n';
+      return 2;
     }
-    if (explicit_output) {
-      loaded.output = settings.output;
+    if (!output_flags.empty() && !overlay_endpoint_flags(loaded.output, output_flags, error)) {
+      std::cerr << "некоректне значення --output-" << error << '\n';
+      return 2;
     }
     if (explicit_warmup) {
       loaded.warmup_s = settings.warmup_s;

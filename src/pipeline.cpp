@@ -268,7 +268,9 @@ struct Session {
   bool fps_origin_set = false;
   bool pace_origin_set = false;
   std::chrono::steady_clock::time_point pace_origin{};
+  std::chrono::steady_clock::time_point pace_next{};
   std::int64_t pace_origin_pts = AV_NOPTS_VALUE;
+  bool decoder_flushed = false;
 
   explicit Session(const Settings& settings)
       : active_scale(settings.scale),
@@ -655,7 +657,19 @@ struct Session {
       }
       const int read = av_read_frame(input, incoming);
       if (read == AVERROR_EOF || read == AVERROR_EXIT) {
-        return false;
+        if (decoder_flushed) {
+          return false;
+        }
+        const int status = avcodec_send_packet(decoder, nullptr);
+        if (status == AVERROR(EAGAIN)) {
+          continue;
+        }
+        decoder_flushed = true;
+        if (status < 0 && status != AVERROR_EOF) {
+          fail("NVDEC: " + ffmpeg_error(status));
+          return false;
+        }
+        continue;
       }
       if (read < 0) {
         fail("читання входу: " + ffmpeg_error(read));
@@ -707,21 +721,24 @@ struct Session {
   }
 
   void pace_owned_frame(AVFrame* frame) {
+    const auto now = std::chrono::steady_clock::now();
     if (!pace_origin_set) {
-      pace_origin = std::chrono::steady_clock::now();
+      pace_origin = now;
+      pace_next = now;
       pace_origin_pts = frame->pts;
       pace_origin_set = true;
       return;
     }
-    double delay_ms = budget_ms;
+    auto target = pace_next + std::chrono::duration<double, std::milli>(budget_ms);
     if (frame->pts != AV_NOPTS_VALUE && pace_origin_pts != AV_NOPTS_VALUE && frame->pts > pace_origin_pts &&
         input_tb.den > 0) {
-      delay_ms = av_q2d(input_tb) * static_cast<double>(frame->pts - pace_origin_pts) * 1000.0;
+      const double delay_ms = av_q2d(input_tb) * static_cast<double>(frame->pts - pace_origin_pts) * 1000.0;
+      target = pace_origin + std::chrono::duration<double, std::milli>(delay_ms);
     }
-    const auto target = pace_origin + std::chrono::duration<double, std::milli>(delay_ms);
     while (running.load() && std::chrono::steady_clock::now() < target) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    pace_next = target;
     if (auto* timing = static_cast<FrameTiming*>(frame->opaque)) {
       timing->ready_at = std::chrono::steady_clock::now();
     }

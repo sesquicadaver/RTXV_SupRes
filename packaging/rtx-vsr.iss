@@ -59,10 +59,19 @@ Name: "desktopicon"; Description: "Ярлик на робочому столі";
 [Code]
 var
   BackupId: String;
+  CustomExitCode: Integer;
+
+function GetTickCount: Cardinal;
+external 'GetTickCount@kernel32.dll stdcall';
+
+function GetCustomSetupExitCode: Integer;
+begin
+  { 0 лишає код Inno, зокрема перезапуск. Ненульове значення — помилка після копіювання. }
+  Result := CustomExitCode;
+end;
 
 function InitializeSetup: Boolean;
 begin
-  Randomize;
   Result := True;
 end;
 
@@ -200,23 +209,40 @@ begin
   Result := Trim(String(Raw)) = BackupId;
 end;
 
+function RegistryPhase: String;
+begin
+  Result := '';
+  RegQueryStringValue(HKLM, 'Software\RTX VSR', 'ResumePhase', Result);
+end;
+
+procedure ScheduleResume;
+var
+  Command: String;
+begin
+  Command := '"' + ExpandConstant('{srcexe}') + '" /DIR="' + WizardDirValue + '"';
+  if WizardSilent then
+    Command := Command + ' /SILENT';
+  RegWriteStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\RunOnce', 'RTXVSRSetupResume', Command);
+end;
+
 function RequestRestart(var NeedsRestart: Boolean; const Phase: String): String;
 begin
   RegWriteStringValue(HKLM, 'Software\RTX VSR', 'ResumePhase', Phase);
+  ScheduleResume;
   NeedsRestart := True;
-  { Порожній Result ігнорує NeedsRestart, і копіювання файлів пішло б до перезапуску.
-    Непорожній рядок зупиняє крок, Inno перезапускає комп'ютер і знову запускає цей setup. }
+  { Прапорець перезапуску сам setup знову не запускає. RunOnce робить це після входу. }
   Result := 'потрібен перезапуск, щоб продовжити встановлення';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
-  Report, Message, RuntimeChoice, DriverChoice, VcName, VcHash, DriverName, DriverUrl, DriverHash, Saved: String;
+  Report, Message, RuntimeChoice, DriverChoice, VcName, VcHash, DriverName, DriverUrl, DriverHash, Saved, SavedPhase: String;
   VcPath, DriverPath, Download: String;
 begin
   Result := '';
   NeedsRestart := False;
+  SavedPhase := RegistryPhase;
   if not TryExtract('rtx-vsr-precheck.exe') or not TryExtract('components.json') then
   begin
     Result := 'у пакеті немає модуля перевірки';
@@ -271,6 +297,11 @@ begin
     end;
     if Code = 3010 then
     begin
+      if SavedPhase = 'runtime' then
+      begin
+        Result := 'після перезапуску VC++ Runtime усе ще потребує перезапуску';
+        Exit;
+      end;
       Result := RequestRestart(NeedsRestart, 'runtime');
       Exit;
     end;
@@ -323,13 +354,18 @@ begin
     end;
     if Code = 3010 then
     begin
+      if SavedPhase = 'driver' then
+      begin
+        Result := 'після перезапуску драйвер NVIDIA усе ще потребує перезапуску';
+        Exit;
+      end;
       Result := RequestRestart(NeedsRestart, 'driver');
       Exit;
     end;
   end;
   if DirExists(ExpandConstant('{app}')) then
   begin
-    BackupId := GetDateTimeString('yyyymmddhhnnss', #0, #0) + '-' + IntToStr(Random(100000));
+    BackupId := GetDateTimeString('yyyymmddhhnnss', #0, #0) + '-' + IntToStr(GetTickCount);
     if not CopyTree(ExpandConstant('{app}'), BackupPath) then
     begin
       Result := 'не вдалося зберегти попередню версію';
@@ -392,6 +428,7 @@ begin
   if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'doctor --json', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
   begin
     RestorePrevious(Detail);
+    CustomExitCode := 1;
     RaiseException(Detail);
   end;
   Clip := ExpandConstant('{app}\install-check.h264');
@@ -399,6 +436,7 @@ begin
   if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'install-check --clip "' + Clip + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
   begin
     RestorePrevious(Detail);
+    CustomExitCode := 1;
     RaiseException(Detail);
   end;
   RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'ok');
