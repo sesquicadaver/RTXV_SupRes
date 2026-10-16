@@ -45,6 +45,7 @@ find_package(Threads REQUIRED)
 add_library(rtx_core STATIC
   src/types.cpp
   src/adaptive.cpp
+  src/audio_copy.cpp
   src/metrics.cpp
   src/timestamps.cpp
   src/color.cpp
@@ -169,7 +170,7 @@ if(WIN32)
 endif()
 
 enable_testing()
-foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk timestamps color transport rtp_mpegts profile install_check)
+foreach(test_name adaptive mailbox metrics endpoint catalog run_without_sdk timestamps color transport rtp_mpegts profile install_check audio_copy)
   add_executable(test_${test_name} tests/test_${test_name}.cpp)
   target_link_libraries(test_${test_name} PRIVATE rtx_core)
   add_test(NAME ${test_name} COMMAND test_${test_name})

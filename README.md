@@ -98,6 +98,8 @@ rtx-vsr-proxy.exe run ^
 
 NVENC: без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`, preset `llhp` або `ull`. Матриця кольору береться з метаданих кадру (інакше BT.709 для HD і BT.601 для SD), limited або full.
 
+Якщо у вході є аудіо і муксер виходу приймає його кодек, пакети копіюються без перекодування. До відкриття виходу тримається не більше 64 пакетів. Елементарний RTP і сирий H.264/H.265 аудіо не несуть. Береться один найкращий аудіопотік.
+
 Події стану й метрики — окремі рядки JSON на stdout. Журнал FFmpeg лишається на stderr. Штатна зупинка: рядок `stop` на stdin, або SIGINT/SIGTERM. Стан: `connecting`, `waiting`, `running`, `overloaded`, `bypass`, `error`, `stopped`.
 
 Метрики, опційно ще й `--metrics-file`:

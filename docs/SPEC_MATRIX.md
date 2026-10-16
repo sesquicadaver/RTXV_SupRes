@@ -17,6 +17,7 @@
 | Відмова VSR не обриває потік: резервний масштаб того ж розміру | `src/gpu/rtx_processor.cu`, `src/pipeline.cpp` | виконання на GPU; `vsr_state=bypass` |
 | Колір з метаданих кадру | `src/color.cpp` | `tests/test_color.cpp` |
 | NVENC без B-кадрів і lookahead | `configure_nvenc` у `src/pipeline.cpp` | параметри кодера; виконання на GPU NVIDIA |
+| Аудіо копіюється, якщо муксер виходу приймає кодек | `src/audio_copy.cpp`, `src/pipeline.cpp` | `tests/test_audio_copy.cpp` |
 | Метрики FPS, пропуски, повний час, стан VSR | `src/metrics.cpp`, цикл у `src/pipeline.cpp` | `tests/test_metrics.cpp` |
 | Відмова без SDK замість підміни ефекту | `src/processor_factory.cpp` | `tests/test_run_without_sdk.cpp` |
 | Збірка Win32 без POSIX-сокетів | `src/platform.hpp`, `src/hls_server.cpp` | job `windows` у `.github/workflows/ci.yml` |
