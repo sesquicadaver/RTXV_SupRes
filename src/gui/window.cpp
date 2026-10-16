@@ -1228,8 +1228,8 @@ void Window::start_benchmark() {
   profile.input.protocol = "file";
   profile.input.role = "client";
   profile.input.path = bench_file_->text().trimmed().toStdString();
-  std::string failure = rtx::password_access_error(profile);
-  if (!failure.empty() || !rtx::save_profile_file(path.toStdString(), profile, failure)) {
+  std::string failure;
+  if (!rtx::save_profile_file(path.toStdString(), profile, failure)) {
     status_->setText(QString::fromStdString(failure));
     return;
   }
