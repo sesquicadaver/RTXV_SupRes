@@ -1,0 +1,12 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="rtx-vsr-16.png">../../RTXV_SupRes-icon/png/rtx-vsr-16.png</file>
+    <file alias="rtx-vsr-20.png">../../RTXV_SupRes-icon/png/rtx-vsr-20.png</file>
+    <file alias="rtx-vsr-24.png">../../RTXV_SupRes-icon/png/rtx-vsr-24.png</file>
+    <file alias="rtx-vsr-32.png">../../RTXV_SupRes-icon/png/rtx-vsr-32.png</file>
+    <file alias="rtx-vsr-48.png">../../RTXV_SupRes-icon/png/rtx-vsr-48.png</file>
+    <file alias="rtx-vsr-64.png">../../RTXV_SupRes-icon/png/rtx-vsr-64.png</file>
+    <file alias="rtx-vsr-128.png">../../RTXV_SupRes-icon/png/rtx-vsr-128.png</file>
+    <file alias="rtx-vsr-256.png">../../RTXV_SupRes-icon/png/rtx-vsr-256.png</file>
+  </qresource>
+</RCC>

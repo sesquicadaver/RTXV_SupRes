@@ -49,8 +49,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\build_setup.ps1
 
 | Файл | Що це |
 |---|---|
-| `build\Release\rtx-vsr.exe` | програма до пакування |
-| `packaging\output\rtx-vsr-setup.exe` | інсталятор для користувача |
+| `build\Release\rtx-vsr.exe` | програма до пакування; іконка ярлика — `RTXV_SupRes-icon\rtx-vsr.ico` у ресурсі exe |
+| `packaging\output\rtx-vsr-setup.exe` | інсталятор для користувача; та сама іконка на файлі setup і на ярликах |
 
 Інсталятор копіює `rtx-vsr.exe`, DLL FFmpeg, `cudart64_*.dll`, файли Qt від `windeployqt` і `nvngx_vsr.dll` з дерева SDK. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022 і ставиться лише якщо системна збірка x64 відсутня або старіша. Драйвер NVIDIA в пакет не входить. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
 

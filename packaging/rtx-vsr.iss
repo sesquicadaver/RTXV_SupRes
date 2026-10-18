@@ -33,6 +33,7 @@ SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
 LicenseFile=NOTICES.txt
+SetupIconFile=..\RTXV_SupRes-icon\rtx-vsr.ico
 CloseApplications=no
 RestartApplications=no
 UsePreviousAppDir=yes
@@ -53,8 +54,8 @@ Source: "{#Dist}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsou
 Source: "{#Dist}\nvidia-driver.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Ярлик на робочому столі"; GroupDescription: "Ярлики:"; Flags: unchecked

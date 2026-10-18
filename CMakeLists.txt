@@ -228,12 +228,23 @@ set_tests_properties(run_without_sdk transport rtp_mpegts PROPERTIES TIMEOUT 20)
 find_package(Qt6 COMPONENTS Widgets QUIET)
 if(TARGET Qt6::Widgets)
   set(CMAKE_AUTOMOC ON)
+  set(CMAKE_AUTORCC ON)
+  enable_language(RC)
+  set(RTX_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/RTXV_SupRes-icon/rtx-vsr.ico")
+  if(NOT EXISTS "${RTX_APP_ICON}")
+    message(FATAL_ERROR "Немає іконки ${RTX_APP_ICON}")
+  endif()
+  # Ярлик робочого столу і Провідник беруть першу іконку з ресурсів exe, не з вікна Qt.
+  file(TO_NATIVE_PATH "${RTX_APP_ICON}" RTX_APP_ICON_NATIVE)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc" "1 ICON \"${RTX_APP_ICON_NATIVE}\"\n")
   add_executable(rtx-vsr
     src/main.cpp
     src/gui/main.cpp
     src/gui/window.cpp
     src/gui/window.hpp
-    src/gui/app.hpp)
+    src/gui/app.hpp
+    src/gui/icons.qrc
+    "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc")
   rtx_link_rtx_core(rtx-vsr)
   target_compile_definitions(rtx-vsr PRIVATE RTX_WITH_GUI)
   target_link_libraries(rtx-vsr PRIVATE Qt6::Widgets)
