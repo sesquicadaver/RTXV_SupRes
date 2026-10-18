@@ -261,7 +261,7 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     gpu_->setEnabled(true);
     refresh_gpu_->setEnabled(true);
     bench_run_->setEnabled(true);
-    status_->setText("Не вдалося запустити rtx-vsr-proxy");
+    status_->setText("Не вдалося запустити RTX VSR");
   });
   connect(bench_, &QProcess::readyReadStandardOutput, this, &Window::read_benchmark);
   connect(bench_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) { finish_benchmark(); });
@@ -593,10 +593,7 @@ void Window::build() {
   update_source_mode();
 }
 
-QString Window::proxy_program() const {
-  const QString beside = QCoreApplication::applicationDirPath() + "/rtx-vsr-proxy";
-  return QFileInfo::exists(beside) ? beside : QString("rtx-vsr-proxy");
-}
+QString Window::proxy_program() const { return QCoreApplication::applicationFilePath(); }
 
 void Window::reload_modes() {
   auto* process = new QProcess(this);

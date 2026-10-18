@@ -7,10 +7,10 @@
 | HTTP `listen` і RTMP `rtmp_listen` як AVOption, не query URL | `src/endpoint.cpp`, `src/pipeline.cpp` | `tests/test_endpoint.cpp`, `tests/test_transport.cpp` |
 | MPEG-TS over RTP: муксер `rtp_mpegts`, демуксер `rtp`, пакет PT 33 | `src/catalog.cpp`, `src/pipeline.cpp` | `tests/test_catalog.cpp`, `tests/test_rtp_mpegts.cpp` |
 | Вхід і вихід незалежні, протоколи можуть відрізнятися | `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_run_without_sdk.cpp` |
-| NVDEC → RTX Video SDK → NVENC, кадр лишається на GPU | `src/pipeline.cpp`, `src/gpu/rtx_processor.cu` | збірка з `RTX_VIDEO_SDK_ROOT` і CUDA 12.x; виконання на GPU NVIDIA |
+| NVDEC → RTX Video SDK → NVENC, кадр лишається на GPU | `src/pipeline.cpp`, `src/gpu/rtx_processor.cu` | збірка з `RTX_VIDEO_SDK_ROOT` (`include/nvsdk_ngx_defs.h`, `nvsdk_ngx_d.lib`) і CUDA 12.x, спільний `cudart`; виконання на GPU NVIDIA |
 | Вихідний CUDA-масив із `CUDA_ARRAY3D_SURFACE_LDST` | `src/gpu/rtx_processor.cu` | компіляція `.cu` з CUDA Toolkit; виконання на GPU NVIDIA |
 | Перерахунок PTS між time_base, пропуски й розриви | `src/timestamps.cpp` | `tests/test_timestamps.cpp` |
-| Перевірка GPU можливостями SDK, не зашитим списком | `src/gpu_probe.cpp`, `probe_rtx_sdk` | `doctor` створює ефект лише коли SDK зібрано; інакше код 3 |
+| Перевірка GPU можливостями SDK, не зашитим списком | `src/gpu_probe.cpp`, `probe_rtx_sdk` | `doctor` створює ефект лише коли SDK зібрано; інакше код 3. `nvcuda.dll` відкладено, тож без драйвера немає `0xc0000135` |
 | Адаптивна якість за повним часом кадру | `src/adaptive.cpp`, `src/pipeline.cpp` | `tests/test_adaptive.cpp` |
 | Масштаб 3 → 2 до відкриття виходу, якщо перший кадр не вкладається в бюджет | `src/pipeline.cpp` | виконання на GPU; без GPU шлях недоступний |
 | Перевантаження без росту черги | `src/mailbox.hpp` | `tests/test_mailbox.cpp` |
@@ -34,6 +34,7 @@
 | Час черги без паузи `--pace`; нуль зразків не входить у бюджет | `src/latency.hpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
 | HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
-| Одне вікно Qt: профіль, джерело, вихід, GPU, старт/стоп, згорнутий бенчмарк | `src/gui/` | `gui_self_check` з `QT_QPA_PLATFORM=offscreen`, якщо зібрано Qt 6 |
-| Реліз Windows 11 x64: Inno Setup, перевірка без CUDA і без VC++ Runtime, кадр лише після VSR без bypass | `packaging/rtx-vsr.iss`, `src/precheck_rules.cpp`, `src/install_check.cpp`, `CMakeLists.txt` | `tests/test_precheck.cpp`, `tests/test_install_check.cpp`; пакет збирає `ISCC` на Windows |
+| Один застосунок `rtx-vsr.exe`: вікно і конвеєр, без окремого проксі | `src/main.cpp`, `src/gui/` | `gui_self_check` (`rtx-vsr --self-check`, `QT_QPA_PLATFORM=offscreen`). Інсталятор — `packaging/output/rtx-vsr-setup.exe` |
+| Реліз Windows 11 x64: один інсталятор ставить `rtx-vsr.exe` і DLL з пакета; драйвер NVIDIA не входить | `packaging/rtx-vsr.iss`, `packaging/build_setup.ps1`, `src/precheck_rules.cpp` | `tests/test_precheck.cpp`; `packaging\output\rtx-vsr-setup.exe` |
 | Пакети збірки ставляться лише коли їх ще немає; драйвер NVIDIA і PowerShell не чіпаються | `packaging/setup_build.ps1` | запуск на Windows 11; `-Plan` друкує відсутні пакети і нічого не ставить |
+| Збірка: VS 2022, `-T cuda=`, архітектури в лапках, `RTX_PRODUCT_BUILD=ON`, потім `build_setup.ps1` | `README.md`, `CMakeLists.txt`, `packaging/build_setup.ps1` | `ctest -C Release`; файл `packaging\output\rtx-vsr-setup.exe` |

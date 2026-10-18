@@ -143,10 +143,17 @@ int main() {
   rtx::ReleaseManifest unset = parsed;
   unset.device_ids.clear();
   unset.min_driver = 0;
+  unset.driver_file.clear();
+  unset.driver_sha256.clear();
   host = ready_host();
   result = rtx::evaluate_precheck(host, unset);
+  CHECK(result.proceed);
+  CHECK(result.driver == rtx::DriverChoice::Keep);
+  host.driver_present = false;
+  host.driver_version = 0;
+  result = rtx::evaluate_precheck(host, unset);
   CHECK(!result.proceed);
-  CHECK(result.message.find("не змінюється") != std::string::npos);
+  CHECK(result.message.find("уже встановлений") != std::string::npos);
 
   std::string error;
   rtx::ReleaseManifest rejected;

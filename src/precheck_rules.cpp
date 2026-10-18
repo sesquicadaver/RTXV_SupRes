@@ -245,7 +245,7 @@ PrecheckResult evaluate_precheck(const HostFacts& host, const ReleaseManifest& m
     return result;
   }
   if (host.app_running) {
-    result.message = "rtx-vsr-proxy або rtx-vsr-gui уже запущено";
+    result.message = "RTX VSR уже запущено";
     return result;
   }
   if (manifest.vc_redist_build <= 0 || manifest.vc_file.empty() || manifest.vc_sha256.empty()) {
@@ -260,8 +260,15 @@ PrecheckResult evaluate_precheck(const HostFacts& host, const ReleaseManifest& m
     result.message = "немає адаптера NVIDIA";
     return result;
   }
-  if (manifest.min_driver <= 0 || manifest.device_ids.empty()) {
-    result.message = "маніфест не фіксує мінімальний драйвер і перелік GPU; драйвер не змінюється";
+  if (manifest.device_ids.empty()) {
+    if (!host.driver_present) {
+      result.driver = DriverChoice::Absent;
+      result.message = "потрібен уже встановлений драйвер NVIDIA";
+      return result;
+    }
+    result.driver = DriverChoice::Keep;
+    result.proceed = true;
+    result.message = "драйвер NVIDIA вже встановлено";
     return result;
   }
   for (const std::uint32_t id : host.nvidia_device_ids) {

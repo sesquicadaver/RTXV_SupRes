@@ -181,7 +181,9 @@ function Find-Iscc {
     (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
     (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
     (Join-Path $env:ProgramFiles "Inno Setup 7\ISCC.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 7\ISCC.exe")
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 7\ISCC.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 7\ISCC.exe")
   )
   foreach ($candidate in $candidates) {
     if (Test-Path $candidate) {
@@ -461,6 +463,8 @@ function Write-BuildEnv([string]$Ffmpeg, [string]$Cuda, [string]$Qt, [string]$Cm
     "# . `"$path`"",
     "`$env:FFMPEG_ROOT = '$Ffmpeg'",
     "`$env:CUDA_PATH = '$Cuda'",
+    "`$env:CUDA_PATH_V12_6 = '$Cuda'",
+    "`$env:CudaToolkitDir = '$Cuda'",
     "`$env:CMAKE_PREFIX_PATH = '$prefix'",
     "`$env:Path = '$qtBin;$cudaBin;$cmakeBin;$isccDir;' + `$env:Path"
   ) | Set-Content -Path $path -Encoding UTF8

@@ -1,3 +1,4 @@
+#include "app.hpp"
 #include "window.hpp"
 
 #include <string>
@@ -6,9 +7,9 @@
 #include <QTimer>
 #include <QWidget>
 
-int main(int argc, char** argv) {
+int run_gui(int argc, char** argv) {
   QApplication app(argc, argv);
-  QApplication::setApplicationName("rtx-vsr-proxy");
+  QApplication::setApplicationName("rtx-vsr");
   Window window;
   window.show();
   if (argc > 1 && std::string(argv[1]) == "--self-check") {

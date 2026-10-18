@@ -21,7 +21,7 @@ namespace rtx {
 namespace {
 
 void print_help() {
-  std::cerr << R"(rtx-vsr-proxy — локальний відеопроксі NVDEC → RTX Video SDK → NVENC
+  std::cerr << R"(rtx-vsr — локальний відеопроксі NVDEC → RTX Video SDK → NVENC
 
 Команди:
   capabilities [--json]     лише режими, які є в цій збірці FFmpeg
@@ -37,11 +37,11 @@ void print_help() {
   rendezvous   режим SRT, якщо він є в бібліотеці
 
 Приклади:
-  rtx-vsr-proxy capabilities
-  rtx-vsr-proxy run \
+  rtx-vsr capabilities
+  rtx-vsr run \
     --input-protocol udp --input-role listener --input-local-port 5600 \
     --output-protocol http --output-role server --output-local-port 8080
-  rtx-vsr-proxy run \
+  rtx-vsr run \
     --input-protocol rtsp --input-role client --input-url rtsp://192.168.1.20:554/live \
     --output-protocol srt --output-role listener --output-local-port 9000
 

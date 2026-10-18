@@ -1,6 +1,6 @@
 ; RTX VSR — один інсталятор Inno Setup для Windows 11 x64.
 ; Підпис релізу: розкоментуйте SignTool і підпишіть setup.exe. Цей файл підпис не імітує.
-; Порти брандмауера не відкриваються. Правило, якщо знадобиться, лише для rtx-vsr-proxy.exe
+; Порти брандмауера не відкриваються. Правило, якщо знадобиться, лише для rtx-vsr.exe
 ; і конкретного режиму прийому.
 ; VC++ Runtime і драйвер NVIDIA цим деінсталятором не знімаються.
 ; Профілі лежать у каталозі користувача і в {app} не входять.
@@ -10,13 +10,16 @@
 #endif
 
 #define AppName "RTX VSR"
-#define AppExeName "rtx-vsr-gui.exe"
+#define AppExeName "rtx-vsr.exe"
 
 [Setup]
 AppId={{8F3A1C2E-6B47-4D91-9E5A-2C7B4F8D1A60}
 AppName={#AppName}
 AppVersion=0.1.0
-AppPublisher=RTXV SupRes
+AppPublisher=sesquicadaver
+AppPublisherURL=https://github.com/sesquicadaver/RTXV_SupRes
+AppSupportURL=https://github.com/sesquicadaver/RTXV_SupRes
+AppUpdatesURL=https://github.com/sesquicadaver/RTXV_SupRes
 DefaultDirName={autopf}\RTX VSR
 DefaultGroupName={#AppName}
 ArchitecturesAllowed=x64
@@ -425,7 +428,7 @@ var
 begin
   if CurStep <> ssPostInstall then Exit;
   Code := 1;
-  if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'doctor --json', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+  if not Exec(ExpandConstant('{app}\rtx-vsr.exe'), 'doctor --json', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
   begin
     RestorePrevious(Detail);
     CustomExitCode := 1;
@@ -433,7 +436,7 @@ begin
   end;
   Clip := ExpandConstant('{app}\install-check.h264');
   Code := 1;
-  if not Exec(ExpandConstant('{app}\rtx-vsr-proxy.exe'), 'install-check --clip "' + Clip + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+  if not Exec(ExpandConstant('{app}\rtx-vsr.exe'), 'install-check --clip "' + Clip + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
   begin
     RestorePrevious(Detail);
     CustomExitCode := 1;
