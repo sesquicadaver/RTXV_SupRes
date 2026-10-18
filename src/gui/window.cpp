@@ -29,7 +29,6 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QRadioButton>
 #include <QSaveFile>
 #include <QSpinBox>
 #include <QStandardPaths>
@@ -72,6 +71,58 @@ QStringList field_names(const QStringList& required, const QStringList& optional
   return fields;
 }
 
+QStringList names_of(const QJsonArray& items) {
+  QStringList names;
+  for (const QJsonValue& item : items) {
+    names.push_back(item.toString());
+  }
+  return names;
+}
+
+QStringList union_fields(const QJsonArray& modes, const QString& direction, const QString& protocol) {
+  QStringList fields;
+  for (const QJsonValue& value : modes) {
+    const QJsonObject mode = value.toObject();
+    if (mode.value("direction").toString() != direction || mode.value("protocol").toString() != protocol) {
+      continue;
+    }
+    for (const QString& name : field_names(names_of(mode.value("required").toArray()), names_of(mode.value("optional").toArray()))) {
+      if (!fields.contains(name)) {
+        fields.push_back(name);
+      }
+    }
+  }
+  return fields;
+}
+
+QJsonObject mode_for_protocol(const QJsonArray& modes, const QString& direction, const QString& protocol, const QStringList& filled) {
+  QJsonObject fallback;
+  QJsonObject chosen;
+  int best = -1;
+  for (const QJsonValue& value : modes) {
+    const QJsonObject mode = value.toObject();
+    if (mode.value("direction").toString() != direction || mode.value("protocol").toString() != protocol) {
+      continue;
+    }
+    if (fallback.isEmpty()) {
+      fallback = mode;
+    }
+    const QStringList required = names_of(mode.value("required").toArray());
+    bool ready = true;
+    for (const QString& name : required) {
+      if (!filled.contains(name)) {
+        ready = false;
+        break;
+      }
+    }
+    if (ready && required.size() > best) {
+      best = required.size();
+      chosen = mode;
+    }
+  }
+  return chosen.isEmpty() ? fallback : chosen;
+}
+
 }  // namespace
 
 namespace {
@@ -101,28 +152,6 @@ QString state_text(const QString& state) {
   return state;
 }
 
-QString container_label(const QString& container) {
-  if (container == "rtp_mpegts" || container == "mpegts") {
-    return "MPEG-TS";
-  }
-  if (container == "rtp") {
-    return "RTP";
-  }
-  if (container == "flv") {
-    return "FLV";
-  }
-  if (container == "hls") {
-    return "HLS";
-  }
-  if (container == "rtsp") {
-    return "RTSP";
-  }
-  if (container.isEmpty()) {
-    return "потік";
-  }
-  return container;
-}
-
 QString vram_text(qulonglong bytes) {
   if (bytes == 0) {
     return "VRAM невідомий";
@@ -133,25 +162,19 @@ QString vram_text(qulonglong bytes) {
 
 bool list_has(const QStringList& values, const QString& name) { return values.contains(name); }
 
-QStringList required_of(const QVariantMap& mode) { return mode.value("required").toStringList(); }
+void show_row(QFormLayout* form, QWidget* field, bool visible) {
+  if (form == nullptr || field == nullptr) {
+    return;
+  }
+  // indexOf — це індекс у списку елементів, не номер рядка. setRowVisible(int)
+  // без перевірки меж читає матрицю рядків і падає з 0xC0000005 ще до показу вікна.
+  form->setRowVisible(field, visible);
+}
 
-QVariantMap mode_payload(const QJsonObject& mode, const QString& codec) {
-  QStringList required;
-  QStringList optional;
-  for (const QJsonValue& item : mode.value("required").toArray()) {
-    required.push_back(item.toString());
+void rename_row(QFormLayout* form, QWidget* field, const QString& text) {
+  if (auto* label = qobject_cast<QLabel*>(form->labelForField(field))) {
+    label->setText(text);
   }
-  for (const QJsonValue& item : mode.value("optional").toArray()) {
-    optional.push_back(item.toString());
-  }
-  QVariantMap payload;
-  payload.insert("protocol", mode.value("protocol").toString());
-  payload.insert("role", mode.value("role").toString());
-  payload.insert("container", mode.value("container").toString());
-  payload.insert("codec", codec);
-  payload.insert("required", required);
-  payload.insert("optional", optional);
-  return payload;
 }
 
 }  // namespace
@@ -306,11 +329,7 @@ void Window::build() {
   root->addLayout(profile_row);
 
   auto* source = new QGroupBox("Джерело");
-  auto* source_form = new QFormLayout(source);
-  source_url_ = new QRadioButton("URL");
-  source_fields_ = new QRadioButton("Адреса і порт");
-  source_url_->setChecked(true);
-  url_ = new QLineEdit;
+  source_form_ = new QFormLayout(source);
   input_protocol_ = new QComboBox;
   input_host_ = new QLineEdit;
   input_local_host_ = new QLineEdit;
@@ -329,27 +348,24 @@ void Window::build() {
   configure_port(input_rtcp_);
   configure_port(input_rtp_min_);
   configure_port(input_rtp_max_);
-  input_role_ = new QComboBox;
-  input_port_caption_ = new QLabel("порт джерела");
-  input_local_caption_ = new QLabel("локальний порт прийому");
-  source_form->addRow(source_url_, url_);
-  source_form->addRow(source_fields_, input_protocol_);
-  source_form->addRow("Віддалена адреса", input_host_);
-  source_form->addRow(input_port_caption_, input_port_);
-  source_form->addRow("Локальна адреса", input_local_host_);
-  source_form->addRow(input_local_caption_, input_local_port_);
-  source_form->addRow("Файл", input_path_);
-  source_form->addRow("Застосунок", input_app_);
-  source_form->addRow("Потік", input_playpath_);
-  source_form->addRow("RTCP", input_rtcp_);
-  source_form->addRow("RTP від", input_rtp_min_);
-  source_form->addRow("RTP до", input_rtp_max_);
-  source_form->addRow("Параметри", input_params_);
-  source_form->addRow("Роль", input_role_);
+  input_port_caption_ = new QLabel("Порт");
+  input_local_caption_ = new QLabel("Порт");
+  source_form_->addRow("Протокол", input_protocol_);
+  source_form_->addRow("Адреса", input_host_);
+  source_form_->addRow(input_port_caption_, input_port_);
+  source_form_->addRow("Адреса", input_local_host_);
+  source_form_->addRow(input_local_caption_, input_local_port_);
+  source_form_->addRow("Файл", input_path_);
+  source_form_->addRow("Застосунок", input_app_);
+  source_form_->addRow("Потік", input_playpath_);
+  source_form_->addRow("RTCP", input_rtcp_);
+  source_form_->addRow("RTP від", input_rtp_min_);
+  source_form_->addRow("RTP до", input_rtp_max_);
+  source_form_->addRow("Параметри", input_params_);
   root->addWidget(source);
 
   auto* output = new QGroupBox("Вихід");
-  auto* output_form = new QFormLayout(output);
+  output_form_ = new QFormLayout(output);
   output_mode_ = new QComboBox;
   output_host_ = new QLineEdit("127.0.0.1");
   output_local_host_ = new QLineEdit("127.0.0.1");
@@ -378,21 +394,21 @@ void Window::build() {
   auto* consumer_row = new QHBoxLayout;
   consumer_row->addWidget(consumer_, 1);
   consumer_row->addWidget(copy);
-  output_form->addRow("Режим", output_mode_);
-  output_form->addRow("Віддалена адреса", output_host_);
-  output_form->addRow(output_port_caption_, output_port_);
-  output_form->addRow("Локальна адреса", output_local_host_);
-  output_form->addRow(output_local_caption_, output_local_port_);
-  output_form->addRow("Файл", output_path_);
-  output_form->addRow("SDP", output_sdp_);
-  output_form->addRow("Застосунок", output_app_);
-  output_form->addRow("Потік", output_playpath_);
-  output_form->addRow("Каталог", output_directory_);
-  output_form->addRow("RTCP", output_rtcp_);
-  output_form->addRow("RTP від", output_rtp_min_);
-  output_form->addRow("RTP до", output_rtp_max_);
-  output_form->addRow("Параметри", output_params_);
-  output_form->addRow("Адреса для споживача", consumer_row);
+  output_form_->addRow("Протокол", output_mode_);
+  output_form_->addRow("Адреса", output_host_);
+  output_form_->addRow(output_port_caption_, output_port_);
+  output_form_->addRow("Адреса", output_local_host_);
+  output_form_->addRow(output_local_caption_, output_local_port_);
+  output_form_->addRow("Файл", output_path_);
+  output_form_->addRow("SDP", output_sdp_);
+  output_form_->addRow("Застосунок", output_app_);
+  output_form_->addRow("Потік", output_playpath_);
+  output_form_->addRow("Каталог", output_directory_);
+  output_form_->addRow("RTCP", output_rtcp_);
+  output_form_->addRow("RTP від", output_rtp_min_);
+  output_form_->addRow("RTP до", output_rtp_max_);
+  output_form_->addRow("Параметри", output_params_);
+  output_form_->addRow("Адреса для споживача", consumer_row);
   root->addWidget(output);
 
   auto* enhance = new QGroupBox("Покращення");
@@ -525,9 +541,7 @@ void Window::build() {
     }
     load_profile(path);
   });
-  connect(source_url_, &QRadioButton::toggled, this, [this](bool) { fill_roles(); });
-  connect(input_protocol_, &QComboBox::currentIndexChanged, this, [this](int) { fill_roles(); });
-  connect(input_role_, &QComboBox::currentIndexChanged, this, [this](int) { update_source_mode(); });
+  connect(input_protocol_, &QComboBox::currentIndexChanged, this, [this](int) { update_source_mode(); });
   connect(output_mode_, &QComboBox::currentIndexChanged, this, [this](int) { update_output_fields(); });
   connect(output_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_local_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
@@ -562,7 +576,6 @@ void Window::build() {
   connect(bench_cancel_, &QPushButton::clicked, this, &Window::cancel_benchmark);
   connect(bench_apply_, &QPushButton::clicked, this, &Window::apply_benchmark_row);
   const auto touch = [this] { mark_dirty(); };
-  connect(url_, &QLineEdit::textChanged, this, touch);
   connect(input_host_, &QLineEdit::textChanged, this, touch);
   connect(input_local_host_, &QLineEdit::textChanged, this, touch);
   connect(input_path_, &QLineEdit::textChanged, this, touch);
@@ -621,51 +634,32 @@ void Window::reload_gpus() {
 void Window::apply_modes(const QJsonArray& modes) {
   modes_ = modes;
   const QString previous_protocol = input_protocol_->currentData().toString();
-  const QString previous_output = output_mode_->currentData().toMap().value("protocol").toString() + "|" +
-                                  output_mode_->currentData().toMap().value("role").toString() + "|" +
-                                  output_mode_->currentData().toMap().value("container").toString() + "|" +
-                                  output_mode_->currentData().toMap().value("codec").toString();
+  const QString previous_output = output_mode_->currentData().toString();
   input_protocol_->blockSignals(true);
   output_mode_->blockSignals(true);
   input_protocol_->clear();
   output_mode_->clear();
-  QStringList seen;
-  const bool h264 = doctor_.value("nvenc_h264").toBool(true);
-  const bool hevc = doctor_.value("nvenc_hevc").toBool(true);
+  QStringList seen_input;
+  QStringList seen_output;
   for (const QJsonValue& value : modes) {
     const QJsonObject mode = value.toObject();
     const QString protocol = mode.value("protocol").toString();
-    if (mode.value("direction").toString() == "input" && !seen.contains(protocol)) {
-      seen.push_back(protocol);
+    if (mode.value("direction").toString() == "input" && !seen_input.contains(protocol)) {
+      seen_input.push_back(protocol);
       input_protocol_->addItem(protocol, protocol);
     }
-    if (mode.value("direction").toString() != "output") {
-      continue;
-    }
-    const QStringList codecs = {h264 ? "h264" : QString(), hevc ? "hevc" : QString()};
-    for (const QString& codec : codecs) {
-      if (codec.isEmpty()) {
-        continue;
-      }
-      const QString label = protocol.toUpper() + " → " + container_label(mode.value("container").toString()) + " → " +
-                            (codec == "hevc" ? "H.265" : "H.264");
-      output_mode_->addItem(label, mode_payload(mode, codec));
+    if (mode.value("direction").toString() == "output" && !seen_output.contains(protocol)) {
+      seen_output.push_back(protocol);
+      output_mode_->addItem(protocol, protocol);
     }
   }
   const int input_index = input_protocol_->findData(previous_protocol);
   input_protocol_->setCurrentIndex(input_index < 0 ? 0 : input_index);
-  for (int index = 0; index < output_mode_->count(); ++index) {
-    const QVariantMap mode = output_mode_->itemData(index).toMap();
-    const QString key = mode.value("protocol").toString() + "|" + mode.value("role").toString() + "|" +
-                        mode.value("container").toString() + "|" + mode.value("codec").toString();
-    if (key == previous_output) {
-      output_mode_->setCurrentIndex(index);
-      break;
-    }
-  }
+  const int output_index = output_mode_->findData(previous_output);
+  output_mode_->setCurrentIndex(output_index < 0 ? 0 : output_index);
   input_protocol_->blockSignals(false);
   output_mode_->blockSignals(false);
-  fill_roles();
+  update_source_mode();
   update_output_fields();
   if (profile_path_.isEmpty()) {
     saved_fingerprint_ = QString::fromStdString(rtx::profile_json(profile_from_form()));
@@ -700,7 +694,10 @@ void Window::apply_gpus(const QJsonObject& doctor) {
   } else if (gpus.isEmpty()) {
     unresolved_gpu_.clear();
     gpu_->setCurrentIndex(0);
-    gpu_fit_->setText(doctor.value("cuda_note").toString("CUDA-пристроїв немає. Оберіть карту після підключення."));
+    const QString note = doctor.value("cuda_note").toString();
+    const QString text = note.isEmpty() ? QString("GPU NVIDIA немає. Ефект RTX VSR запуститься після підключення карти.") : note;
+    gpu_fit_->setText(text);
+    status_->setText(text);
   } else {
     unresolved_gpu_.clear();
     gpu_->setCurrentIndex(index < 0 ? 0 : index);
@@ -718,7 +715,7 @@ void Window::check_selected_gpu() {
     return;
   }
   const QString uuid = gpu_->currentData().toString();
-  const QString codec = output_mode_->currentData().toMap().value("codec").toString();
+  const QString codec = doctor_.value("nvenc_h264").toBool(true) ? "h264" : "hevc";
   if (uuid.isEmpty()) {
     return;
   }
@@ -749,108 +746,56 @@ void Window::check_selected_gpu() {
   process->start(proxy_program(), args);
 }
 
-void Window::fill_roles() {
-  input_role_->blockSignals(true);
-  const QString previous = input_role_->currentData().toString();
-  const QString protocol = input_protocol_->currentData().toString();
-  const QString scheme = url_->text().section("://", 0, 0);
-  input_role_->clear();
-  if (source_url_->isChecked()) {
-    input_role_->addItem("з URL", QString());
-  }
-  QStringList seen;
-  for (const QJsonValue& value : modes_) {
-    const QJsonObject mode = value.toObject();
-    if (mode.value("direction").toString() != "input") {
-      continue;
-    }
-    const QString mode_protocol = mode.value("protocol").toString();
-    if (source_url_->isChecked()) {
-      if (!scheme.isEmpty() && mode_protocol != scheme) {
-        continue;
-      }
-    } else if (mode_protocol != protocol) {
-      continue;
-    }
-    const QString role = mode.value("role").toString();
-    if (seen.contains(role)) {
-      continue;
-    }
-    seen.push_back(role);
-    input_role_->addItem(role, role);
-  }
-  const int index = input_role_->findData(previous);
-  input_role_->setCurrentIndex(index < 0 ? 0 : index);
-  input_role_->blockSignals(false);
-  update_source_mode();
-}
+void Window::fill_roles() { update_source_mode(); }
 
 void Window::update_source_mode() {
-  const bool url = source_url_->isChecked();
-  url_->setVisible(url);
-  input_protocol_->setEnabled(!url);
-  QStringList fields;
-  if (!url) {
-    for (const QJsonValue& value : modes_) {
-      const QJsonObject mode = value.toObject();
-      if (mode.value("direction").toString() == "input" &&
-          mode.value("protocol").toString() == input_protocol_->currentData().toString() &&
-          mode.value("role").toString() == input_role_->currentData().toString()) {
-        QStringList required;
-        QStringList optional;
-        for (const QJsonValue& item : mode.value("required").toArray()) {
-          required.push_back(item.toString());
-        }
-        for (const QJsonValue& item : mode.value("optional").toArray()) {
-          optional.push_back(item.toString());
-        }
-        fields = field_names(required, optional);
-        break;
-      }
-    }
-  }
-  input_host_->setVisible(!url && list_has(fields, "remote_host"));
-  input_port_->setVisible(!url && list_has(fields, "remote_port"));
-  input_port_caption_->setVisible(!url && list_has(fields, "remote_port"));
-  input_local_host_->setVisible(!url && list_has(fields, "local_host"));
-  input_local_port_->setVisible(!url && list_has(fields, "local_port"));
-  input_local_caption_->setVisible(!url && list_has(fields, "local_port"));
-  input_path_->setVisible(!url && list_has(fields, "path"));
-  input_app_->setVisible(!url && list_has(fields, "app"));
-  input_playpath_->setVisible(!url && list_has(fields, "playpath"));
-  input_rtcp_->setVisible(!url && list_has(fields, "rtcp_port"));
-  input_rtp_min_->setVisible(!url && list_has(fields, "rtp_port_min"));
-  input_rtp_max_->setVisible(!url && list_has(fields, "rtp_port_max"));
-  input_params_->setVisible(!url && list_has(fields, "params"));
-  rtx::Role role = rtx::Role::Client;
-  rtx::parse_role(input_role_->currentData().toString().toStdString(), role);
-  input_port_caption_->setText("порт джерела");
-  input_local_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Input, role)));
+  const QString protocol = input_protocol_->currentData().toString();
+  const QStringList fields = union_fields(modes_, "input", protocol);
+  const bool remote = list_has(fields, "remote_host");
+  const bool local = list_has(fields, "local_host");
+  const bool remote_port = list_has(fields, "remote_port");
+  const bool local_port = list_has(fields, "local_port");
+  rename_row(source_form_, input_host_, remote && local ? "Віддалена адреса" : "Адреса");
+  rename_row(source_form_, input_local_host_, remote && local ? "Локальна адреса" : "Адреса");
+  input_port_caption_->setText(remote_port && local_port ? "Віддалений порт" : "Порт");
+  input_local_caption_->setText(local_port && remote_port ? "Локальний порт" : "Порт");
+  show_row(source_form_, input_host_, remote);
+  show_row(source_form_, input_port_, remote_port);
+  show_row(source_form_, input_local_host_, local);
+  show_row(source_form_, input_local_port_, local_port);
+  show_row(source_form_, input_path_, list_has(fields, "path"));
+  show_row(source_form_, input_app_, list_has(fields, "app"));
+  show_row(source_form_, input_playpath_, list_has(fields, "playpath"));
+  show_row(source_form_, input_rtcp_, list_has(fields, "rtcp_port"));
+  show_row(source_form_, input_rtp_min_, list_has(fields, "rtp_port_min"));
+  show_row(source_form_, input_rtp_max_, list_has(fields, "rtp_port_max"));
+  show_row(source_form_, input_params_, list_has(fields, "params"));
   mark_dirty();
 }
 
 void Window::update_output_fields() {
-  const QVariantMap mode = output_mode_->currentData().toMap();
-  const QStringList fields = field_names(required_of(mode), mode.value("optional").toStringList());
-  rtx::Role role = rtx::Role::Client;
-  rtx::parse_role(mode.value("role").toString().toStdString(), role);
-  output_port_caption_->setText("порт отримувача");
-  output_local_caption_->setText(QString::fromStdString(rtx::port_caption(rtx::Direction::Output, role)));
-  output_host_->setVisible(list_has(fields, "remote_host"));
-  output_port_->setVisible(list_has(fields, "remote_port"));
-  output_port_caption_->setVisible(list_has(fields, "remote_port"));
-  output_local_host_->setVisible(list_has(fields, "local_host"));
-  output_local_port_->setVisible(list_has(fields, "local_port"));
-  output_local_caption_->setVisible(list_has(fields, "local_port"));
-  output_path_->setVisible(list_has(fields, "path"));
-  output_sdp_->setVisible(list_has(fields, "sdp"));
-  output_app_->setVisible(list_has(fields, "app"));
-  output_playpath_->setVisible(list_has(fields, "playpath"));
-  output_directory_->setVisible(list_has(fields, "directory"));
-  output_rtcp_->setVisible(list_has(fields, "rtcp_port"));
-  output_rtp_min_->setVisible(list_has(fields, "rtp_port_min"));
-  output_rtp_max_->setVisible(list_has(fields, "rtp_port_max"));
-  output_params_->setVisible(list_has(fields, "params"));
+  const QStringList fields = union_fields(modes_, "output", output_mode_->currentData().toString());
+  const bool remote = list_has(fields, "remote_host");
+  const bool local = list_has(fields, "local_host");
+  const bool remote_port = list_has(fields, "remote_port");
+  const bool local_port = list_has(fields, "local_port");
+  rename_row(output_form_, output_host_, remote && local ? "Віддалена адреса" : "Адреса");
+  rename_row(output_form_, output_local_host_, remote && local ? "Локальна адреса" : "Адреса");
+  output_port_caption_->setText(remote_port && local_port ? "Віддалений порт" : "Порт");
+  output_local_caption_->setText(local_port && remote_port ? "Локальний порт" : "Порт");
+  show_row(output_form_, output_host_, remote);
+  show_row(output_form_, output_port_, remote_port);
+  show_row(output_form_, output_local_host_, local);
+  show_row(output_form_, output_local_port_, local_port);
+  show_row(output_form_, output_path_, list_has(fields, "path"));
+  show_row(output_form_, output_sdp_, list_has(fields, "sdp"));
+  show_row(output_form_, output_app_, list_has(fields, "app"));
+  show_row(output_form_, output_playpath_, list_has(fields, "playpath"));
+  show_row(output_form_, output_directory_, list_has(fields, "directory"));
+  show_row(output_form_, output_rtcp_, list_has(fields, "rtcp_port"));
+  show_row(output_form_, output_rtp_min_, list_has(fields, "rtp_port_min"));
+  show_row(output_form_, output_rtp_max_, list_has(fields, "rtp_port_max"));
+  show_row(output_form_, output_params_, list_has(fields, "params"));
   update_consumer();
   check_selected_gpu();
   mark_dirty();
@@ -885,13 +830,40 @@ rtx::Profile Window::profile_from_form() const {
   profile.quality_auto = quality_auto_->isChecked();
   profile.quality = quality_->currentData().toInt();
   profile.bitrate = bitrate_->text().trimmed().isEmpty() ? 0 : bitrate_->text().toLongLong();
-  profile.codec = "h264";
-  const QVariantMap mode = output_mode_->currentData().toMap();
-  if (!mode.isEmpty()) {
-    profile.output.protocol = mode.value("protocol").toString().toStdString();
-    profile.output.role = mode.value("role").toString().toStdString();
-    profile.codec = mode.value("codec").toString().toStdString();
-    const QString container = mode.value("container").toString();
+  profile.codec = doctor_.value("nvenc_h264").toBool(true) ? "h264" : "hevc";
+  QStringList output_filled;
+  if (!output_host_->text().trimmed().isEmpty()) {
+    output_filled.push_back("remote_host");
+  }
+  if (output_port_->value() > 0) {
+    output_filled.push_back("remote_port");
+  }
+  if (!output_local_host_->text().trimmed().isEmpty()) {
+    output_filled.push_back("local_host");
+  }
+  if (output_local_port_->value() > 0) {
+    output_filled.push_back("local_port");
+  }
+  if (!output_path_->text().trimmed().isEmpty()) {
+    output_filled.push_back("path");
+  }
+  if (!output_sdp_->text().trimmed().isEmpty()) {
+    output_filled.push_back("sdp");
+  }
+  if (!output_app_->text().trimmed().isEmpty()) {
+    output_filled.push_back("app");
+  }
+  if (!output_playpath_->text().trimmed().isEmpty()) {
+    output_filled.push_back("playpath");
+  }
+  if (!output_directory_->text().trimmed().isEmpty()) {
+    output_filled.push_back("directory");
+  }
+  const QJsonObject output_mode = mode_for_protocol(modes_, "output", output_mode_->currentData().toString(), output_filled);
+  if (!output_mode.isEmpty()) {
+    profile.output.protocol = output_mode.value("protocol").toString().toStdString();
+    profile.output.role = output_mode.value("role").toString().toStdString();
+    const QString container = output_mode.value("container").toString();
     if (profile.output.protocol == "rtp") {
       profile.output.payload = container == "rtp" ? profile.codec : "mpegts";
     }
@@ -935,16 +907,32 @@ rtx::Profile Window::profile_from_form() const {
   if (output_local_port_->isVisible()) {
     profile.output.local_port = output_local_port_->value() > 0 ? output_local_port_->value() : -1;
   }
-  if (source_url_->isChecked()) {
-    profile.input.url = url_->text().trimmed().toStdString();
-    const auto scheme = profile.input.url.find("://");
-    if (scheme != std::string::npos) {
-      profile.input.protocol = profile.input.url.substr(0, scheme);
-    }
-    profile.input.role = input_role_->currentData().toString().toStdString();
-  } else {
-    profile.input.protocol = input_protocol_->currentData().toString().toStdString();
-    profile.input.role = input_role_->currentData().toString().toStdString();
+  QStringList input_filled;
+  if (!input_host_->text().trimmed().isEmpty()) {
+    input_filled.push_back("remote_host");
+  }
+  if (input_port_->value() > 0) {
+    input_filled.push_back("remote_port");
+  }
+  if (!input_local_host_->text().trimmed().isEmpty()) {
+    input_filled.push_back("local_host");
+  }
+  if (input_local_port_->value() > 0) {
+    input_filled.push_back("local_port");
+  }
+  if (!input_path_->text().trimmed().isEmpty()) {
+    input_filled.push_back("path");
+  }
+  if (!input_app_->text().trimmed().isEmpty()) {
+    input_filled.push_back("app");
+  }
+  if (!input_playpath_->text().trimmed().isEmpty()) {
+    input_filled.push_back("playpath");
+  }
+  const QJsonObject input_mode = mode_for_protocol(modes_, "input", input_protocol_->currentData().toString(), input_filled);
+  if (!input_mode.isEmpty()) {
+    profile.input.protocol = input_mode.value("protocol").toString().toStdString();
+    profile.input.role = input_mode.value("role").toString().toStdString();
     if (input_host_->isVisible()) {
       profile.input.remote_host = input_host_->text().trimmed().toStdString();
     }
@@ -1005,27 +993,16 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
     quality_->setCurrentIndex(quality_index);
   }
   bitrate_->setText(profile.bitrate > 0 ? QString::number(profile.bitrate) : QString());
-  if (!profile.input.url.empty() || !visible_url.isEmpty()) {
-    url_->setText(visible_url);
-    source_url_->blockSignals(true);
-    source_url_->setChecked(true);
-    source_url_->blockSignals(false);
-    fill_roles();
-    const int role = input_role_->findData(QString::fromStdString(profile.input.role));
-    if (role >= 0) {
-      input_role_->setCurrentIndex(role);
-    }
-  } else {
-    source_fields_->setChecked(true);
-    const int protocol = input_protocol_->findData(QString::fromStdString(profile.input.protocol));
-    if (protocol >= 0) {
-      input_protocol_->setCurrentIndex(protocol);
-    }
-    fill_roles();
-    const int role = input_role_->findData(QString::fromStdString(profile.input.role));
-    if (role >= 0) {
-      input_role_->setCurrentIndex(role);
-    }
+  QString protocol = QString::fromStdString(profile.input.protocol);
+  if (protocol.isEmpty()) {
+    protocol = visible_url.section("://", 0, 0);
+  }
+  const int protocol_index = input_protocol_->findData(protocol);
+  if (protocol_index >= 0) {
+    input_protocol_->setCurrentIndex(protocol_index);
+  }
+  update_source_mode();
+  {
     input_host_->setText(QString::fromStdString(profile.input.remote_host));
     input_port_->setValue(std::max(0, profile.input.remote_port));
     input_local_host_->setText(QString::fromStdString(profile.input.local_host));
@@ -1038,20 +1015,11 @@ void Window::form_from_profile(const rtx::Profile& profile, const QString& visib
     input_rtp_max_->setValue(std::max(0, profile.input.rtp_port_max));
     input_params_->setText(params_line(profile.input.params));
   }
-  const QString container = profile.output.protocol == "rtp" && profile.output.payload != "mpegts" &&
-                                    !profile.output.payload.empty()
-                                ? "rtp"
-                                : QString();
-  for (int index = 0; index < output_mode_->count(); ++index) {
-    const QVariantMap mode = output_mode_->itemData(index).toMap();
-    if (mode.value("protocol").toString().toStdString() == profile.output.protocol &&
-        mode.value("role").toString().toStdString() == profile.output.role &&
-        mode.value("codec").toString().toStdString() == profile.codec &&
-        (container.isEmpty() || mode.value("container").toString() == container)) {
-      output_mode_->setCurrentIndex(index);
-      break;
-    }
+  const int output_index = output_mode_->findData(QString::fromStdString(profile.output.protocol));
+  if (output_index >= 0) {
+    output_mode_->setCurrentIndex(output_index);
   }
+  update_output_fields();
   output_host_->setText(QString::fromStdString(profile.output.remote_host));
   output_port_->setValue(std::max(0, profile.output.remote_port));
   output_local_host_->setText(QString::fromStdString(profile.output.local_host));
@@ -1079,10 +1047,6 @@ bool Window::write_profile(const QString& path, QString& error, bool remember) {
     return false;
   }
   if (remember) {
-    if (source_url_->isChecked()) {
-      loaded_url_ = QString::fromStdString(profile.input.url);
-      url_->setText(loaded_url_);
-    }
     profile_path_ = path;
     saved_fingerprint_ = QString::fromStdString(rtx::profile_json(profile_from_form()));
     mark_dirty();

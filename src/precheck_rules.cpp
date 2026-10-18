@@ -257,13 +257,15 @@ PrecheckResult evaluate_precheck(const HostFacts& host, const ReleaseManifest& m
   }
   if (host.nvidia_device_ids.empty()) {
     result.driver = DriverChoice::Absent;
-    result.message = "немає адаптера NVIDIA";
+    result.proceed = true;
+    result.message = "адаптера NVIDIA немає; встановлення не зупиняється";
     return result;
   }
   if (manifest.device_ids.empty()) {
     if (!host.driver_present) {
       result.driver = DriverChoice::Absent;
-      result.message = "потрібен уже встановлений драйвер NVIDIA";
+      result.proceed = true;
+      result.message = "драйвер NVIDIA не виявлено; встановлення не зупиняється";
       return result;
     }
     result.driver = DriverChoice::Keep;

@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][string]$BuildDir,
   [Parameter(Mandatory = $true)][string]$FfmpegBin,
   [Parameter(Mandatory = $true)][string]$CudaBin,
-  [Parameter(Mandatory = $true)][string]$SdkBin,
+  [Parameter(Mandatory = $true)]  [string]$SdkBin,
+  [string]$QtPrefix = "",
   [string]$VcRedist = "",
   [string]$NvidiaDriver = "",
   [string]$InstallClip = "",
@@ -108,9 +109,16 @@ if (-not $deploy) {
 if ($LASTEXITCODE -ne 0) {
   Fail "windeployqt завершився з кодом $LASTEXITCODE"
 }
-if (-not (Test-Path (Join-Path $Dist "platforms\qwindows.dll"))) {
-  Fail "windeployqt не поклав platforms\qwindows.dll"
+if ($QtPrefix -eq "") {
+  $QtPrefix = Split-Path -Parent (Split-Path -Parent $deploy.Source)
 }
+$qwindows = Join-Path $QtPrefix "plugins\platforms\qwindows.dll"
+if (-not (Test-Path -LiteralPath $qwindows)) {
+  Fail "немає $qwindows. platforms\qwindows.dll має лежати в пакеті"
+}
+$platforms = Join-Path $Dist "platforms"
+New-Item -ItemType Directory -Force -Path $platforms | Out-Null
+Copy-Item -LiteralPath $qwindows (Join-Path $platforms "qwindows.dll") -Force
 
 Get-ChildItem -Path $FfmpegBin -Filter "*.dll" | Copy-Item -Destination $Dist -Force
 foreach ($stem in @("avcodec", "avformat", "avutil")) {
@@ -153,17 +161,42 @@ if ($NvidiaDriver -ne "") {
 }
 
 $clip = Join-Path $Dist "install-check.h264"
-if ($InstallClip -ne "") {
-  Copy-Item $InstallClip $clip -Force
-} else {
-  $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
-  if (-not $ffmpeg) {
-    Fail "передайте -InstallClip або ffmpeg з h264_nvenc. libx264 для цього кліпу не використовується"
+if ($InstallClip -eq "") {
+  $InstallClip = Join-Path $PSScriptRoot "install-check.h264"
+}
+if (-not (Test-Path -LiteralPath $InstallClip)) {
+  Fail "немає вхідного кліпу $InstallClip"
+}
+Copy-Item -LiteralPath $InstallClip $clip -Force
+if (-not (Test-Path -LiteralPath $clip) -or (Get-Item -LiteralPath $clip).Length -le 0) {
+  Fail "install-check.h264 порожній"
+}
+foreach ($name in @("Qt6Widgets.dll", "platforms\qwindows.dll", "avformat-61.dll", "avcodec-61.dll", "avutil-59.dll", "nvngx_vsr.dll")) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Dist $name))) {
+    Fail "у комплекті немає $name"
   }
-  & ffmpeg -y -hide_banner -loglevel error -f lavfi -i "color=c=black:s=640x360:r=25:d=0.2" -frames:v 5 -c:v h264_nvenc -pix_fmt yuv420p $clip
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $clip)) {
-    Fail "не вдалося зібрати install-check.h264 через h264_nvenc. Передайте -InstallClip"
+}
+if (-not (Get-ChildItem $Dist -Filter "cudart64_*.dll")) {
+  Fail "у комплекті немає cudart64_*.dll"
+}
+# Той самий комплект, що й у інсталяторі: інакше подвійний клік по build\Release\rtx-vsr.exe
+# показує відсутні Qt6Widgets.dll і avformat-61.dll.
+$stagedExe = Join-Path $BuildDir "rtx-vsr.exe"
+if (-not (Test-Path -LiteralPath $stagedExe)) {
+  $stagedExe = Join-Path $BuildDir "Release\rtx-vsr.exe"
+}
+$exeDir = Split-Path -Parent $stagedExe
+Get-ChildItem -LiteralPath $Dist -Recurse -File | ForEach-Object {
+  if ($_.Name -in @("vc_redist.x64.exe", "nvidia-driver.exe", "components.json", "rtx-product-build.txt")) {
+    return
   }
+  $relative = $_.FullName.Substring($Dist.Length).TrimStart("\", "/")
+  $target = Join-Path $exeDir $relative
+  $parent = Split-Path -Parent $target
+  if (-not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  }
+  Copy-Item -LiteralPath $_.FullName -Destination $target -Force
 }
 
 $deviceText = (@($template.supported_device_ids) | ForEach-Object { [int]$_ }) -join ","

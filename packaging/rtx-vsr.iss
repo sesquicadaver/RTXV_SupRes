@@ -22,8 +22,9 @@ AppSupportURL=https://github.com/sesquicadaver/RTXV_SupRes
 AppUpdatesURL=https://github.com/sesquicadaver/RTXV_SupRes
 DefaultDirName={autopf}\RTX VSR
 DefaultGroupName={#AppName}
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+; x64 у Inno Setup застарів. x64os — саме Windows x64, без ARM64. x64compatible сюди не підходить: CUDA і NVENC зібрані лише під x64.
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0.22000
 PrivilegesRequired=admin
 OutputDir=output
@@ -45,7 +46,8 @@ UninstallDisplayIcon={app}\{#AppExeName}
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#Dist}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "vc_redist.x64.exe,nvidia-driver.exe,rtx-vsr-precheck.exe,components.json"
+Source: "{#Dist}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "vc_redist.x64.exe,nvidia-driver.exe,rtx-vsr-precheck.exe,components.json,platforms\qwindows.dll"
+Source: "{#Dist}\platforms\qwindows.dll"; DestDir: "{app}\platforms"; Flags: ignoreversion
 Source: "{#Dist}\rtx-vsr-precheck.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\rtx-vsr-precheck.exe"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "{#Dist}\components.json"; DestDir: "{app}"; Flags: ignoreversion
@@ -54,8 +56,8 @@ Source: "{#Dist}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsou
 Source: "{#Dist}\nvidia-driver.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Ярлик на робочому столі"; GroupDescription: "Ярлики:"; Flags: unchecked
@@ -203,16 +205,6 @@ begin
   Result := ExpandConstant('{commonappdata}\RTX VSR\backup-') + BackupId;
 end;
 
-function BackupMatches: Boolean;
-var
-  Raw: AnsiString;
-begin
-  Result := False;
-  if (BackupId = '') or (not FileExists(BackupPath + '\backup.id')) then Exit;
-  if not LoadStringFromFile(BackupPath + '\backup.id', Raw) then Exit;
-  Result := Trim(String(Raw)) = BackupId;
-end;
-
 function RegistryPhase: String;
 begin
   Result := '';
@@ -258,11 +250,12 @@ begin
      (not ManifestLists(Manifest, 'nvngx_vsr.dll')) or (not ManifestLists(Manifest, 'platforms/qwindows.dll')) or
      (Pos('"name":"cudart64_', Manifest) = 0) then
   begin
-    Result := 'у пакеті немає Qt6Widgets.dll, avformat-61.dll, avcodec-61.dll, avutil-59.dll, cudart або nvngx_vsr.dll';
+    Result := 'у пакеті немає Qt6Widgets.dll, platforms\qwindows.dll, avformat-61.dll, avcodec-61.dll, avutil-59.dll, cudart або nvngx_vsr.dll';
     Exit;
   end;
   Missing := '';
   if TargetLacks('Qt6Widgets.dll') then Missing := Missing + #13#10 + 'Qt6Widgets.dll';
+  if TargetLacks('platforms\qwindows.dll') then Missing := Missing + #13#10 + 'platforms\qwindows.dll';
   if TargetLacks('avformat-61.dll') then Missing := Missing + #13#10 + 'avformat-61.dll';
   if TargetLacks('avcodec-61.dll') then Missing := Missing + #13#10 + 'avcodec-61.dll';
   if TargetLacks('avutil-59.dll') then Missing := Missing + #13#10 + 'avutil-59.dll';
@@ -427,64 +420,10 @@ begin
   RegDeleteValue(HKLM, 'Software\RTX VSR', 'ResumePhase');
 end;
 
-function RestorePrevious(var Detail: String): Boolean;
-var
-  Code: Integer;
-begin
-  Result := False;
-  Detail := 'перевірку встановлення не пройдено';
-  RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'failed');
-  if BackupMatches then
-  begin
-    if CopyTree(BackupPath, ExpandConstant('{app}')) then
-    begin
-      RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'rolled-back');
-      Detail := 'перевірку встановлення не пройдено, файли цієї спроби повернуто, профілі не змінювались';
-      Result := True;
-    end
-    else
-      Detail := 'перевірку встановлення не пройдено, повернення файлів цієї спроби не вдалося';
-    Exit;
-  end;
-  if (BackupId <> '') then
-  begin
-    Detail := 'перевірку встановлення не пройдено, резервна копія не належить цій спробі';
-    Exit;
-  end;
-  if FileExists(ExpandConstant('{uninstallexe}')) then
-  begin
-    Code := 1;
-    if Exec(ExpandConstant('{uninstallexe}'), '/VERYSILENT /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-    begin
-      Detail := 'перевірку встановлення не пройдено, файли програми прибрано, VC++ Runtime і драйвер NVIDIA не чіпались';
-      Result := True;
-    end
-    else
-      Detail := 'перевірку встановлення не пройдено, прибрати щойно скопійовані файли не вдалося';
-  end;
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  Code: Integer;
-  Clip, Detail: String;
 begin
   if CurStep <> ssPostInstall then Exit;
-  Code := 1;
-  if not Exec(ExpandConstant('{app}\rtx-vsr.exe'), 'doctor --json', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-  begin
-    RestorePrevious(Detail);
-    CustomExitCode := 1;
-    RaiseException(Detail);
-  end;
-  Clip := ExpandConstant('{app}\install-check.h264');
-  Code := 1;
-  if not Exec(ExpandConstant('{app}\rtx-vsr.exe'), 'install-check --clip "' + Clip + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-  begin
-    RestorePrevious(Detail);
-    CustomExitCode := 1;
-    RaiseException(Detail);
-  end;
+  { GPU, драйвер і VSR тут не перевіряються: без карти програма все одно має лишитися встановленою. }
   RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'ok');
   if BackupId <> '' then
   begin

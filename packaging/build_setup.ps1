@@ -15,7 +15,8 @@ $env:Path = "$QtBin;$FfmpegBin;$CudaBin;" + $env:Path
   -BuildDir $BuildDir `
   -FfmpegBin $FfmpegBin `
   -CudaBin $CudaBin `
-  -SdkBin $SdkBin
+  -SdkBin $SdkBin `
+  -QtPrefix (Split-Path -Parent $QtBin)
 
 $iscc = @(
   (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),

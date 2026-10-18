@@ -238,7 +238,9 @@ if(TARGET Qt6::Widgets)
   # У рядку .rc послідовність \r — це перенос, тож icon\rtx-vsr.ico rc.exe розрізає навпіл.
   file(TO_CMAKE_PATH "${RTX_APP_ICON}" RTX_APP_ICON_RC)
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc" "1 ICON \"${RTX_APP_ICON_RC}\"\n")
-  add_executable(rtx-vsr
+  # WIN32: підсистема Windows, не консоль. Подвійний клік відкриває лише вікно.
+  # Точка входу лишається main. Qt6::EntryPoint тягне WinMain і на Qt 6.8 ламає лінк.
+  add_executable(rtx-vsr WIN32
     src/main.cpp
     src/gui/main.cpp
     src/gui/window.cpp
@@ -247,8 +249,43 @@ if(TARGET Qt6::Widgets)
     src/gui/icons.qrc
     "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc")
   rtx_link_rtx_core(rtx-vsr)
+  if(MSVC)
+    target_link_options(rtx-vsr PRIVATE "/ENTRY:mainCRTStartup")
+  endif()
   target_compile_definitions(rtx-vsr PRIVATE RTX_WITH_GUI)
   target_link_libraries(rtx-vsr PRIVATE Qt6::Widgets)
+  if(NOT FFMPEG_ROOT OR NOT EXISTS "${FFMPEG_ROOT}/bin")
+    message(FATAL_ERROR "Потрібен FFMPEG_ROOT/bin, щоб rtx-vsr.exe запускався без окремого PATH")
+  endif()
+  set(RTX_CUDA_BIN "")
+  if(CUDAToolkit_BIN_DIR)
+    set(RTX_CUDA_BIN "${CUDAToolkit_BIN_DIR}")
+  elseif(NOT "$ENV{CUDA_PATH}" STREQUAL "")
+    set(RTX_CUDA_BIN "$ENV{CUDA_PATH}/bin")
+  endif()
+  get_target_property(RTX_QT_DLL Qt6::Core IMPORTED_LOCATION_RELEASE)
+  if(NOT RTX_QT_DLL)
+    get_target_property(RTX_QT_DLL Qt6::Core IMPORTED_LOCATION)
+  endif()
+  if(NOT RTX_QT_DLL)
+    message(FATAL_ERROR "Не знайдено Qt6Core.dll для windeployqt")
+  endif()
+  get_filename_component(RTX_QT_BIN "${RTX_QT_DLL}" DIRECTORY)
+  set(RTX_WINDEPLOYQT "${RTX_QT_BIN}/windeployqt.exe")
+  if(NOT EXISTS "${RTX_WINDEPLOYQT}")
+    message(FATAL_ERROR "Немає ${RTX_WINDEPLOYQT}")
+  endif()
+  add_custom_command(TARGET rtx-vsr POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DEXE=$<TARGET_FILE:rtx-vsr>
+      -DDEST=$<TARGET_FILE_DIR:rtx-vsr>
+      -DCONFIG=$<CONFIG>
+      -DWINDEPLOYQT=${RTX_WINDEPLOYQT}
+      -DFFMPEG_BIN=${FFMPEG_ROOT}/bin
+      -DCUDA_BIN=${RTX_CUDA_BIN}
+      -DSDK=${RTX_VIDEO_SDK_ROOT}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/packaging/deploy_runtime.cmake
+    COMMENT "Qt, FFmpeg і cudart поруч із rtx-vsr.exe")
   add_test(NAME gui_self_check COMMAND rtx-vsr --self-check)
   set_tests_properties(gui_self_check PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
 endif()

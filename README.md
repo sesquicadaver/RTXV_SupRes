@@ -2,9 +2,9 @@
 
 Ліцензія: freeware from sesquicadaver. https://github.com/sesquicadaver/RTXV_SupRes
 
-Один застосунок Windows 11 x64: **FFmpeg/NVDEC → RTX Video SDK → NVENC → транспорт**. Вікно і конвеєр — це `rtx-vsr.exe`. Окремого проксі немає.
+Один застосунок Windows 11 x64: **FFmpeg/NVDEC → RTX Video SDK → NVENC → транспорт**. Вікно і конвеєр — це `rtx-vsr.exe`. Окремого проксі немає. Файл зібрано як віконну програму: подвійний клік відкриває лише вікно налаштувань і не створює консоль.
 
-Без аргументів відкривається вікно: профіль, джерело, вихід, GPU, згорнутий бенчмарк. Команди `doctor`, `run`, `capabilities`, `install-check` ідуть у той самий файл. Користувачу ставиться один інсталятор `packaging\output\rtx-vsr-setup.exe`.
+Без аргументів відкривається вікно: профіль, джерело, вихід, GPU, згорнутий бенчмарк. Команди `doctor`, `run`, `capabilities`, `install-check` лишаються в тому самому файлі для вікна і для вже відкритого PowerShell; окремого консольного вікна вони не відкривають. Користувачу ставиться один інсталятор `packaging\output\rtx-vsr-setup.exe`.
 
 Вхід і вихід обираються незалежно. Програма показує лише ті протоколи й ролі, які є в поточній збірці FFmpeg. `doctor` підтверджує ефект VSR лише після створення ефекту SDK на GPU NVIDIA. Без GPU або без `nvngx_vsr.dll` він завершується кодом 3.
 
@@ -49,10 +49,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\build_setup.ps1
 
 | Файл | Що це |
 |---|---|
-| `build\Release\rtx-vsr.exe` | програма до пакування; іконка — `RTXV_SupRes-icon\rtx-vsr.ico`. Залежності ставить інсталятор, не цей каталог |
+| `build\Release\rtx-vsr.exe` | віконна програма до пакування; іконка — `RTXV_SupRes-icon\rtx-vsr.ico`. У цьому ж каталозі після збірки лежать `Qt6Widgets.dll`, `platforms\qwindows.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll` |
 | `packaging\output\rtx-vsr-setup.exe` | інсталятор для користувача; та сама іконка на файлі setup і на ярликах |
 
-Інсталятор перед копіюванням читає, чого немає в каталозі програми: `Qt6Widgets.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`, `nvngx_vsr.dll`, а також VC++ Runtime, якщо системна збірка x64 відсутня або старіша. Якщо список непорожній, питає підтвердження і ставить ці файли з пакета. Драйвер NVIDIA не пропонує і не завантажує. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
+`install-check.h264` лежить у `packaging\` і копіюється в пакет як вхідний ролик. Збірка його не кодує. Інсталятор не запускає `doctor` і `install-check`: відсутній GPU чи драйвер не скасовує встановлення. Попередження про це з'являється у вікні після запуску `rtx-vsr.exe`.
+
+Інсталятор перед копіюванням читає, чого немає в каталозі програми: `Qt6Widgets.dll`, `platforms\qwindows.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`, `nvngx_vsr.dll`, а також VC++ Runtime, якщо системна збірка x64 відсутня або старіша. Якщо список непорожній, питає підтвердження і ставить ці файли з пакета. `platforms\qwindows.dll` береться з `plugins\platforms` зібраного Qt і входить у `rtx-vsr-setup.exe`. Інсталятор копіює його в `{app}\platforms` і з мережі не завантажує. Без цього файлу в комплекті пакет не збирається. Драйвер NVIDIA не пропонує і не завантажує. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
 
 Перевірка вікна без дисплея: `build\Release\rtx-vsr.exe --self-check` при `QT_QPA_PLATFORM=offscreen`. `ctest` сам додає в `PATH` каталоги FFmpeg, CUDA і Qt.
 

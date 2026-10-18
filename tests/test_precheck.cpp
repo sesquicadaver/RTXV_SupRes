@@ -114,7 +114,7 @@ int main() {
   host = ready_host();
   host.nvidia_device_ids.clear();
   result = rtx::evaluate_precheck(host, parsed);
-  CHECK(!result.proceed);
+  CHECK(result.proceed);
   CHECK(result.driver == rtx::DriverChoice::Absent);
 
   host = ready_host();
@@ -152,8 +152,9 @@ int main() {
   host.driver_present = false;
   host.driver_version = 0;
   result = rtx::evaluate_precheck(host, unset);
-  CHECK(!result.proceed);
-  CHECK(result.message.find("уже встановлений") != std::string::npos);
+  CHECK(result.proceed);
+  CHECK(result.driver == rtx::DriverChoice::Absent);
+  CHECK(result.message.find("не виявлено") != std::string::npos);
 
   std::string error;
   rtx::ReleaseManifest rejected;

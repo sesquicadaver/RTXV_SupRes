@@ -12,12 +12,12 @@ class QTimer;
 
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
-class QRadioButton;
 class QSpinBox;
 class QTableWidget;
 class QWidget;
@@ -76,8 +76,8 @@ class Window : public QMainWindow {
   QPushButton* save_ = nullptr;
   QPushButton* save_as_ = nullptr;
   QLabel* dirty_ = nullptr;
-  QRadioButton* source_url_ = nullptr;
-  QRadioButton* source_fields_ = nullptr;
+  QFormLayout* source_form_ = nullptr;
+  QFormLayout* output_form_ = nullptr;
   QLineEdit* url_ = nullptr;
   QComboBox* input_protocol_ = nullptr;
   QLineEdit* input_host_ = nullptr;
