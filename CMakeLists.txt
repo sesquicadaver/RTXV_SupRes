@@ -235,8 +235,9 @@ if(TARGET Qt6::Widgets)
     message(FATAL_ERROR "Немає іконки ${RTX_APP_ICON}")
   endif()
   # Ярлик робочого столу і Провідник беруть першу іконку з ресурсів exe, не з вікна Qt.
-  file(TO_NATIVE_PATH "${RTX_APP_ICON}" RTX_APP_ICON_NATIVE)
-  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc" "1 ICON \"${RTX_APP_ICON_NATIVE}\"\n")
+  # У рядку .rc послідовність \r — це перенос, тож icon\rtx-vsr.ico rc.exe розрізає навпіл.
+  file(TO_CMAKE_PATH "${RTX_APP_ICON}" RTX_APP_ICON_RC)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc" "1 ICON \"${RTX_APP_ICON_RC}\"\n")
   add_executable(rtx-vsr
     src/main.cpp
     src/gui/main.cpp

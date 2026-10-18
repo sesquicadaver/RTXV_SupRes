@@ -49,10 +49,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\build_setup.ps1
 
 | Файл | Що це |
 |---|---|
-| `build\Release\rtx-vsr.exe` | програма до пакування; іконка ярлика — `RTXV_SupRes-icon\rtx-vsr.ico` у ресурсі exe |
+| `build\Release\rtx-vsr.exe` | програма до пакування; іконка — `RTXV_SupRes-icon\rtx-vsr.ico`. Залежності ставить інсталятор, не цей каталог |
 | `packaging\output\rtx-vsr-setup.exe` | інсталятор для користувача; та сама іконка на файлі setup і на ярликах |
 
-Інсталятор копіює `rtx-vsr.exe`, DLL FFmpeg, `cudart64_*.dll`, файли Qt від `windeployqt` і `nvngx_vsr.dll` з дерева SDK. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022 і ставиться лише якщо системна збірка x64 відсутня або старіша. Драйвер NVIDIA в пакет не входить. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
+Інсталятор перед копіюванням читає, чого немає в каталозі програми: `Qt6Widgets.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`, `nvngx_vsr.dll`, а також VC++ Runtime, якщо системна збірка x64 відсутня або старіша. Якщо список непорожній, питає підтвердження і ставить ці файли з пакета. Драйвер NVIDIA не пропонує і не завантажує. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
 
 Перевірка вікна без дисплея: `build\Release\rtx-vsr.exe --self-check` при `QT_QPA_PLATFORM=offscreen`. `ctest` сам додає в `PATH` каталоги FFmpeg, CUDA і Qt.
 

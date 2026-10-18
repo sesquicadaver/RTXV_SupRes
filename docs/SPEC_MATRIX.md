@@ -36,6 +36,7 @@
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
 | Один застосунок `rtx-vsr.exe`: вікно і конвеєр, без окремого проксі | `src/main.cpp`, `src/gui/` | `gui_self_check` (`rtx-vsr --self-check`, `QT_QPA_PLATFORM=offscreen`). Інсталятор — `packaging/output/rtx-vsr-setup.exe` |
 | Іконка робочого столу, ярлика і вікна — `rtx-vsr.ico` (16…256) | `RTXV_SupRes-icon/rtx-vsr.ico`, ресурс exe, `src/gui/icons.qrc`, `packaging/rtx-vsr.iss` | `gui_self_check` перевіряє кадри 16 і 256 у вікні; Провідник читає іконку з `rtx-vsr.exe` |
+| Інсталятор бачить відсутні Qt, FFmpeg, nvngx і VC++ і ставить їх лише після підтвердження | `packaging/rtx-vsr.iss` | діалог зі списком `Qt6Widgets.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`; драйвер NVIDIA не завантажується |
 | Реліз Windows 11 x64: один інсталятор ставить `rtx-vsr.exe` і DLL з пакета; драйвер NVIDIA не входить | `packaging/rtx-vsr.iss`, `packaging/build_setup.ps1`, `src/precheck_rules.cpp` | `tests/test_precheck.cpp`; `packaging\output\rtx-vsr-setup.exe` |
 | Пакети збірки ставляться лише коли їх ще немає; драйвер NVIDIA і PowerShell не чіпаються | `packaging/setup_build.ps1` | запуск на Windows 11; `-Plan` друкує відсутні пакети і нічого не ставить |
 | Збірка: VS 2022, `-T cuda=`, архітектури в лапках, `RTX_PRODUCT_BUILD=ON`, потім `build_setup.ps1` | `README.md`, `CMakeLists.txt`, `packaging/build_setup.ps1` | `ctest -C Release`; файл `packaging\output\rtx-vsr-setup.exe` |

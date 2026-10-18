@@ -238,6 +238,46 @@ begin
   Result := 'потрібен перезапуск. Встановлення продовжиться після входу адміністратора. Вхід звичайного користувача setup не запускає';
 end;
 
+function ManifestLists(const Manifest, Name: String): Boolean;
+begin
+  Result := Pos('"name":"' + Name + '"', Manifest) > 0;
+end;
+
+function TargetLacks(const FileName: String): Boolean;
+begin
+  Result := not FileExists(AddBackslash(WizardDirValue) + FileName);
+end;
+
+function OfferMissingDependencies(const RuntimeChoice, Manifest: String): String;
+var
+  Missing, Offer: String;
+begin
+  Result := '';
+  if (not ManifestLists(Manifest, 'Qt6Widgets.dll')) or (not ManifestLists(Manifest, 'avformat-61.dll')) or
+     (not ManifestLists(Manifest, 'avcodec-61.dll')) or (not ManifestLists(Manifest, 'avutil-59.dll')) or
+     (not ManifestLists(Manifest, 'nvngx_vsr.dll')) or (not ManifestLists(Manifest, 'platforms/qwindows.dll')) or
+     (Pos('"name":"cudart64_', Manifest) = 0) then
+  begin
+    Result := 'у пакеті немає Qt6Widgets.dll, avformat-61.dll, avcodec-61.dll, avutil-59.dll, cudart або nvngx_vsr.dll';
+    Exit;
+  end;
+  Missing := '';
+  if TargetLacks('Qt6Widgets.dll') then Missing := Missing + #13#10 + 'Qt6Widgets.dll';
+  if TargetLacks('avformat-61.dll') then Missing := Missing + #13#10 + 'avformat-61.dll';
+  if TargetLacks('avcodec-61.dll') then Missing := Missing + #13#10 + 'avcodec-61.dll';
+  if TargetLacks('avutil-59.dll') then Missing := Missing + #13#10 + 'avutil-59.dll';
+  if TargetLacks('nvngx_vsr.dll') then Missing := Missing + #13#10 + 'nvngx_vsr.dll';
+  if RuntimeChoice = 'install' then Missing := Missing + #13#10 + 'VC++ Runtime x64';
+  if Missing = '' then Exit;
+  Offer := 'На комп''ютері немає залежностей RTX VSR:' + Missing + #13#10 + #13#10 +
+    'Вони є в цьому пакеті і будуть встановлені в каталог програми.' + #13#10 +
+    'VC++ Runtime, якщо він у списку, ставиться в систему.' + #13#10 +
+    'Драйвер NVIDIA не завантажується.' + #13#10 + #13#10 +
+    'Завантажити і встановити відсутні компоненти зараз?';
+  if MsgBox(Offer, mbConfirmation, MB_YESNO) = IDNO then
+    Result := 'встановлення залежностей скасовано';
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
@@ -272,6 +312,8 @@ begin
     Exit;
   end;
   RuntimeChoice := JsonString(Report, 'runtime');
+  Result := OfferMissingDependencies(RuntimeChoice, ReadAnsiFile(ExpandConstant('{tmp}\components.json')));
+  if Result <> '' then Exit;
   DriverChoice := JsonString(Report, 'driver');
   if RuntimeChoice = 'install' then
   begin
