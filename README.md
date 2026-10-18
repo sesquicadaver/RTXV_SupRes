@@ -1,117 +1,94 @@
-# RTX VSR Proxy
+# RTX VSR
 
-Локальний відеопроксі: **FFmpeg/NVDEC → RTX Video SDK → NVENC → транспорт**.
-Вхід і вихід обираються незалежно. Програма показує лише ті протоколи й ролі, які є в поточній збірці FFmpeg.
+Ліцензія: freeware from sesquicadaver. https://github.com/sesquicadaver/RTXV_SupRes
 
-Ефект VSR з'являється у збірці з `RTX_VIDEO_SDK_ROOT` і CUDA Toolkit 12.x. `doctor` підтверджує його лише після створення ефекту SDK на GPU NVIDIA.
+Один застосунок Windows 11 x64: **FFmpeg/NVDEC → RTX Video SDK → NVENC → транспорт**. Вікно і конвеєр — це `rtx-vsr.exe`. Окремого проксі немає. Файл зібрано як віконну програму: подвійний клік відкриває лише вікно налаштувань і не створює консоль.
 
-Ціль — лише **Windows 11 x64**. CMake відхиляє іншу платформу незалежно від `RTX_PRODUCT_BUILD`. Linux не збирається і не є перевіркою цього продукту.
+Без аргументів відкривається вікно: профіль, джерело, вихід, GPU, згорнутий бенчмарк. Команди `doctor`, `run`, `capabilities`, `install-check` лишаються в тому самому файлі для вікна і для вже відкритого PowerShell; окремого консольного вікна вони не відкривають. Користувачу ставиться один інсталятор `packaging\output\rtx-vsr-setup.exe`.
+
+Вхід і вихід обираються незалежно. Програма показує лише ті протоколи й ролі, які є в поточній збірці FFmpeg. `doctor` підтверджує ефект VSR лише після створення ефекту SDK на GPU NVIDIA. Без GPU або без `nvngx_vsr.dll` він завершується кодом 3.
+
+Відповідність вимог і тестів: [docs/SPEC_MATRIX.md](docs/SPEC_MATRIX.md). Відкриті обмеження: [TODO_FIXME.md](TODO_FIXME.md).
 
 ## Збірка
 
-Штатний продуктовий компілятор — MSVC x64. Для розробки без пакета потрібні Qt 6 Widgets, FFmpeg і, для ефекту VSR, CUDA Toolkit 12.x. Без pkg-config задайте `FFMPEG_ROOT` з `include/` та `lib/`.
+Лише Windows 11 x64, PowerShell, генератор `Visual Studio 17 2022`. Каталог `build` створюється цією командою. Чужий `build` (з іншого комп'ютера чи іншої платформи) перед цим видаляється.
 
-```bat
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+RTX Video SDK скрипт не завантажує. Його розпаковують з кабінету NVIDIA так, щоб у корені були `include\nvsdk_ngx_defs.h`, `samples\RTX_Video_API\` і десь у дереві `nvngx_vsr.dll`. Корінь задається як `RTX_VIDEO_SDK_ROOT`.
+
+```powershell
+Set-Location C:\RTXV_SupRes
+powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\setup_build.ps1
+```
+
+Повторний запуск нічого не перевстановлює, якщо інструменти вже є. Код 0 — інструменти і заголовок SDK знайдені. Код 2 — інструменти є, а `RTX_VIDEO_SDK_ROOT` ще не вказує на SDK. Драйвер NVIDIA цей скрипт не ставить.
+
+Далі в тому самому вікні. Шляхи FFmpeg, CUDA і Qt мають збігатися з тим, що щойно знайшов або поставив `setup_build.ps1`. Після успішного проходу їх можна взяти з `%LOCALAPPDATA%\rtx-vsr-build\build-env.ps1`.
+
+```powershell
+$cuda = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
+$env:CUDA_PATH = $cuda
+$env:CUDA_PATH_V12_6 = $cuda
+$env:CudaToolkitDir = $cuda
+$env:RTX_VIDEO_SDK_ROOT = "C:\RTX"
+$env:FFMPEG_ROOT = "$env:LOCALAPPDATA\rtx-vsr-build\ffmpeg\ffmpeg-n7.1.5-12-g1fdbca85aa-win64-lgpl-shared-7.1"
+$env:CMAKE_PREFIX_PATH = "$env:LOCALAPPDATA\rtx-vsr-build\Qt\6.8.3\msvc2022_64"
+$env:Path = "C:\Program Files\CMake\bin;$cuda\bin;$env:FFMPEG_ROOT\bin;$env:CMAKE_PREFIX_PATH\bin;" + $env:Path
+if (Test-Path .\build) { Remove-Item -Recurse -Force .\build }
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T "cuda=$cuda" "-DCMAKE_CUDA_ARCHITECTURES=75;86;89" -DRTX_PRODUCT_BUILD=ON
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
-build\Release\rtx-vsr-proxy.exe capabilities
-build\Release\rtx-vsr-proxy.exe doctor --json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\build_setup.ps1
 ```
 
-Якщо є Qt 6 Widgets, збирається `rtx-vsr-gui`: одне вікно з профілем, джерелом, виходом, GPU поруч із покращенням і згорнутою панеллю бенчмарку. Вікно керує `rtx-vsr-proxy` через `QProcess`; кадри лишаються в конвеєрі CLI. Перевірка без дисплея: `set QT_QPA_PLATFORM=offscreen` і `build\Release\rtx-vsr-gui.exe --self-check`.
+`-T "cuda=..."` обов'язковий: без нього MSBuild шукає каталог CUDA як порожній рядок. Список архітектур у PowerShell береться в лапки, інакше `;` розриває команду. `CMAKE_CUDA_RUNTIME_LIBRARY` у `CMakeLists.txt` стоїть `Shared`: лінкер бере `cudart64_12.dll`, не `cudart_static.lib`. `nvcuda.dll` підвантажується відкладено і в пакет не входить — її дає вже встановлений драйвер NVIDIA.
 
-Тести не використовують `assert`, тож Release із `NDEBUG` їх не вимикає.
+`RTX_PRODUCT_BUILD=ON` вимагає MSVC, Qt 6 Widgets, справжній SDK, `nvsdk_ngx_d.lib` і явний список архітектур. `RTX_CI_COMPILE_CHECK` разом із ним заборонений.
 
-MSYS2 UCRT64 у CI — лише перевірка компіляції Windows-коду без інсталятора. Це не шлях релізу. Реліз вимагає MSVC.
+Результат:
 
-Окрема перевірка `RTX_CI_COMPILE_CHECK=ON` збирає `rtx_processor.cu` компілятором CUDA 12.x і MSVC+nvcc. Заголовок у `ci/compile_check/` — не NVIDIA SDK: `doctor` завершується кодом 3 і друкує «ефект RTX VSR: не підтверджено». Прапори попереджень C++ стоять лише на `COMPILE_LANGUAGE:CXX`, тож nvcc їх не бачить. Для релізного пакета цей прапорець заборонений.
+| Файл | Що це |
+|---|---|
+| `build\Release\rtx-vsr.exe` | віконна програма до пакування; іконка — `RTXV_SupRes-icon\rtx-vsr.ico`. У цьому ж каталозі після збірки лежать `Qt6Widgets.dll`, `platforms\qwindows.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll` |
+| `packaging\output\rtx-vsr-setup.exe` | інсталятор для користувача; та сама іконка на файлі setup і на ярликах |
 
-## Пакет Windows 11 x64
+`install-check.h264` лежить у `packaging\` і копіюється в пакет як вхідний ролик. Збірка його не кодує. Інсталятор не запускає `doctor` і `install-check`: відсутній GPU чи драйвер не скасовує встановлення. Попередження про це з'являється у вікні після запуску `rtx-vsr.exe`.
 
-Один інсталятор Inno Setup, не WiX. Збірка пакета:
+Інсталятор перед копіюванням читає, чого немає в каталозі програми: `Qt6Widgets.dll`, `platforms\qwindows.dll`, `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`, `nvngx_vsr.dll`, а також VC++ Runtime, якщо системна збірка x64 відсутня або старіша. Якщо список непорожній, питає підтвердження і ставить ці файли з пакета. `platforms\qwindows.dll` береться з `plugins\platforms` зібраного Qt і входить у `rtx-vsr-setup.exe`. Інсталятор копіює його в `{app}\platforms` і з мережі не завантажує. Без цього файлу в комплекті пакет не збирається. Драйвер NVIDIA не пропонує і не завантажує. `vc_redist.x64.exe` береться зі встановленої Visual Studio 2022. `rtx-vsr-precheck.exe` ярлика не має: це внутрішній крок інсталятора. `ISCC.exe` шукається в `%LOCALAPPDATA%\Programs\Inno Setup 6` і в Program Files.
 
-```bat
-cmake -S . -B build -DRTX_PRODUCT_BUILD=ON -DCMAKE_CUDA_ARCHITECTURES=75;86;89
-cmake --build build --config Release
-powershell -File packaging\stage_product.ps1 -BuildDir build -FfmpegBin C:\ffmpeg\bin -CudaBin C:\cuda\bin -SdkBin C:\RTX_Video_SDK -VcRedist C:\redist\vc_redist.x64.exe
-```
+Перевірка вікна без дисплея: `build\Release\rtx-vsr.exe --self-check` при `QT_QPA_PLATFORM=offscreen`. `ctest` сам додає в `PATH` каталоги FFmpeg, CUDA і Qt.
 
-`RTX_PRODUCT_BUILD` завершується помилкою без Windows x64, MSVC, Qt 6 Widgets, справжнього RTX Video SDK, `nvsdk_ngx`, CUDA і явного списку архітектур. `CMAKE_CUDA_ARCHITECTURES=OFF` теж відхиляється. `RTX_CI_COMPILE_CHECK` разом із ним заборонений. Маркер `rtx-product-build.txt` лежить у каталозі CMake (`build`), виконувані файли скрипт бере звідти або з `build\Release`. `ISCC packaging\rtx-vsr.iss` збирає `packaging\output\rtx-vsr-setup.exe`; рядок `SignTool` у скрипті закоментований, доки немає сертифіката.
+## Поведінка
 
-Перед копіюванням файлів `rtx-vsr-precheck.exe` дивиться версію Windows, x64, місце на диску і запущені копії програми. Адаптер і версію його драйвера він читає через SetupAPI (`ProviderName` і `DriverVersion`), без CUDA і без припущення про `System32\drivers`. Збірка precheck лінкує статичний CRT (`/MT`), тож на чистій Windows вона стартує до встановлення VC++ Runtime. Runtime x64 ставиться лише якщо збірка відсутня або старіша; новіша сумісна лишається. Сумісний драйвер не чіпається, і тоді мережа не потрібна. Якщо драйвер треба поставити, достатньо `driver_url` і `driver_sha256` у маніфесті або локального пакета `-NvidiaDriver`. Невідомий або OEM-адаптер поза `supported_device_ids` дає повідомлення і не отримує приблизний драйвер. Завантажений або локальний драйвер і VC++ Runtime перевіряються підписом і SHA-256. Код 3010 повертає текст і `NeedsRestart`. Inno зупиняє копіювання і перезапускає комп'ютер. Повторний запуск записується в `HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce` як `RTXVSRSetupResume`. Цей ключ спрацьовує лише після входу користувача з групи Administrators. Якщо setup було підвищено чужим обліковим записом, а після перезапуску входить звичайний користувач, встановлення само не продовжується: потрібен вхід адміністратора. Сам прапорець перезапуску інсталятор не запускає. `ResumePhase` не дає зациклити ту саму фазу. Помилка `doctor` або `install-check` після копіювання ставить код виходу 1 через `GetCustomSetupExitCode`. Якщо коротка перевірка після копіювання не проходить, повертаються файли саме цієї спроби з `{commonappdata}\RTX VSR\backup-<id>`, а встановлення завершується помилкою. Якщо копія не збіглася з ідентифікатором спроби, успіх не повідомляється. Профілі в каталозі користувача не входять у каталог програми.
+Масштаб 2 або 3. Якість 1..4, за замовчуванням `auto` зі стартом на 2. Адаптація дивиться на повний час кадру. Якщо перший кадр на масштабі 3 не вкладається в інтервал, до відкриття виходу масштаб падає до 2. Далі роздільність не змінюється.
 
-`rtx-vsr-proxy install-check --clip install-check.h264` для кожного GPU за UUID декодує запис, проганяє VSR, кодує і приймає результат лише коли є кадр VSR і не було `bypass`. Кадр після резервного масштабу перевірку не проходить. Це не вимір FPV-затримки. `doctor` лишається перевіркою залежностей; наявність `h264_nvenc` у FFmpeg його не замінює.
+Між декодером і VSR один слот. Якщо `rtx_video_api_cuda_evaluate` падає, потік не обривається: кадр масштабується на GPU до вже відкритого розміру, `vsr_state` стає `bypass`.
 
-У `packaging/components.json` перелік PCI device id (десяткові числа), `min_driver` (572.16 записується як 57216) і `vc_redist_build` заповнюються з приміток тієї версії SDK і офіційних пакетів. Порожні поля зупиняють `stage_product.ps1`. Повідомлення ліцензій — `packaging/NOTICES.txt`. FFmpeg лише динамічний LGPL, без `--enable-gpl` і `--enable-nonfree`. Кліп перевірки кодується `h264_nvenc` або передається готовим файлом, не `libx264`.
+NVENC без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`. Колір береться з метаданих кадру. Аудіо копіюється без перекодування, якщо муксер виходу приймає кодек. Елементарний RTP і сирий H.264/H.265 аудіо не несуть.
 
-## Збірка з RTX Video SDK
+Події стану й метрики — рядки JSON на stdout. Журнал FFmpeg — на stderr. Зупинка: рядок `stop` на stdin. `doctor --json` друкує `ok`, `effect`, `blockers`, `gpus` з `uuid` і `vram_bytes`. Профіль зберігає UUID GPU. `--gpu N` під час запуску скидає UUID і бере індекс.
 
-Потрібні Windows 11 x64, драйвер NVIDIA, CUDA Toolkit 12.x (SDK 1.1 несумісний із CUDA 13) і розпакований [RTX Video SDK](https://developer.nvidia.com/rtx-video-sdk).
+Сеанс приймає лише адресу і порт. Ім'я користувача, пароль і параметри `passphrase`, `password`, `secret`, `token` відхиляються. Протоколи з обов'язковим обліковим записом (`ftp`, `sftp`, `smb`, `icecast`) у каталог не входять.
 
-```bat
-set RTX_VIDEO_SDK_ROOT=C:\path\to\RTX_Video_SDK
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
-```
-
-CMake підхоплює `samples/RTX_Video_API/rtx_video_api.h` і `rtx_video_api_cuda_impl.cpp`. Поруч має лежати `nvngx_vsr.dll`.
-
-`doctor` повертає успіх лише після створення й закриття ефекту SDK. Без зібраного SDK або без CUDA-пристрою він завершується кодом 3 і не вважає VSR робочим. `doctor --json` друкує той самий висновок структурою: `ok`, `effect`, `blockers`, `gpus` з `uuid` і `vram_bytes`. Наявність CUDA або `h264_nvenc` у FFmpeg не замінює створення ефекту на конкретній карті.
-
-Обраний GPU перевіряється за індексом у списку виявлених пристроїв, а не за довжиною списку: зонд може пропускати окремі номери. Профіль зберігає UUID; `--gpu N` під час запуску скидає UUID і бере числовий індекс.
-
-## Порти
-
-| Роль | Що означає порт |
+| Роль | Порт |
 |---|---|
 | `client` | порт віддаленого джерела або отримувача |
 | `listener` | локальна адреса й порт прийому |
 | `server` | локальна адреса й порт, де слухає вихід |
-| `rendezvous` | режим SRT, якщо він є в бібліотеці |
+| `rendezvous` | режим SRT, якщо він є в FFmpeg |
 
-RTSP додатково має `rtp_port_min` і `rtp_port_max` (локальний діапазон RTP/RTCP). RTP має окремий `rtcp_port`.
-
-`rtp` без payload — це MPEG-TS over RTP. Вихід відкриває муксер `rtp_mpegts` (RTP payload type 33, далі синхробайт TS `0x47`). Вхід відкриває демуксер `rtp`. Протокол `rtp://` сам заголовки RTP не додає. `--output-payload h264|hevc|es` лишає елементарний муксер `rtp` і пише SDP у `--output-sdp`. Вхід елементарного RTP — `--input-payload h264` і `--input-path file.sdp`.
-
-HTTP-сервер — режим `http` + `server`. `listen=1` передається словником AVOption в `avio_open2`, не рядком запиту URL. HLS-сервер — окремий режим `hls` + `server`; читання запиту має таймаут 2 с.
+`rtp` без payload — MPEG-TS over RTP (муксер `rtp_mpegts`, демуксер `rtp`). `--output-payload h264|hevc|es` пише SDP. HTTP-сервер — `http` + `server`. Адреса HLS для споживача — `http://хост:порт/index.m3u8`.
 
 ```bat
-rtx-vsr-proxy.exe run ^
+rtx-vsr.exe run ^
   --input-protocol udp --input-role listener --input-local-port 5600 ^
   --output-protocol http --output-role server --output-local-host 127.0.0.1 --output-local-port 8080
 ```
 
 ```bat
-rtx-vsr-proxy.exe run ^
+rtx-vsr.exe run ^
   --input-protocol rtsp --input-role client --input-url rtsp://192.168.1.20:554/live ^
   --output-protocol srt --output-role listener --output-local-port 9000
 ```
 
-## Якість і черга
-
-Масштаб 2 або 3. Якість 1..4, за замовчуванням `auto` зі стартом на 2. Адаптація дивиться на повний час кадру: декод, очікування в слоті, VSR, NVENC і запис. Два кадри довші за ~85% інтервалу знижують якість; вісім коротших за ~45% підвищують. Якщо перший кадр на масштабі 3 не вкладається в інтервал, до відкриття виходу масштаб падає до 2. Далі роздільність не змінюється.
-
-Між декодером і VSR один слот: новий кадр замінює ще не оброблений. Мітки часу перераховуються з time_base входу в time_base кодера; пропуск і розрив дають один крок кадру, а не чужі одиниці.
-
-Якщо `rtx_video_api_cuda_evaluate` падає, потік не обривається: кадр масштабується на GPU до вже відкритого розміру кодера, `vsr_state` стає `bypass`.
-
-NVENC: без B-кадрів, `rc-lookahead=0`, `delay=0`, `zerolatency`, preset `llhp` або `ull`. Матриця кольору береться з метаданих кадру (інакше BT.709 для HD і BT.601 для SD), limited або full.
-
-Події стану й метрики — окремі рядки JSON на stdout. Журнал FFmpeg лишається на stderr. Штатна зупинка: рядок `stop` на stdin, або SIGINT/SIGTERM. Стан: `connecting`, `waiting`, `running`, `overloaded`, `bypass`, `error`, `stopped`.
-
-Метрики, опційно ще й `--metrics-file`:
-
-`fps`, `frames_in`, `frames_out`, `frames_dropped`, час кадру, `vsr_quality`, `vsr_scale`, `vsr_state`, `vsr_frames`, `proxy_p95_ms`, `proxy_p99_ms`, `overload_frames`, `bypass_entries`, фактичні вхідна й вихідна роздільність. `vsr_frames` рахує кадри, які пройшли ефект VSR, а не резервний масштаб. `proxy_p95_ms` — час обробки проксі за кожним кадром після прогріву, без затримки камери, мережі, показу у споживачі й без штучної паузи `--pace`. FPS рахується за виміряними кадрами навіть коли `--metrics-interval 0`. Якщо після прогріву не лишилось жодного кадру, перцентилі не вважаються вкладенням у бюджет.
-
-`vsr_state`: `running`, `degraded` (якість знижено), `overloaded` (якість вже мінімальна, час кадру ще великий), `bypass` (VSR вимкнено, розмір кадру збережено).
-
-## Профіль
-
-Спільний JSON схеми 1 для CLI (`--profile`) і вікна. Запис атомарний. Сеанс відкривається лише за адресою і портом. Ім'я користувача, пароль і параметри `passphrase`, `password`, `secret`, `token` відхиляються. Протоколи, яким для з'єднання обов'язково потрібен обліковий запис (`ftp`, `sftp`, `smb`, `icecast`), у каталог не входять. Елементарний RTP на вході зберігає `payload=es`, тож CLI відкриває SDP, а не MPEG-TS. Роль, задана для джерела з URL, відновлюється під час завантаження. Профіль тримає SDP, `app`, `playpath`, обидва кінці SRT rendezvous, RTCP і додаткові параметри. Явний прапорець `--input-*` або `--output-*` перекриває лише це поле профілю. Протокол, роль і решта збереженого кінця лишаються. URL і окремі поля адреси разом валідатор відхиляє. Відсутній UUID карти лишається невирішеним, доки користувач не обере іншу.
-
-## Бенчмарк
-
-Панель у вікні згорнута. Порівняння йде окремими сеансами, бо зміна масштабу потребує нового запуску. Фіксуються GPU, кодек, бітрейт і транспорт виходу. Вхід бенчмарку — окремий профіль лише з файлом запису: протокол `file`, роль `client`, шлях. URL, адреси, порти й параметри живого джерела в цей профіль не потрапляють. До восьми комбінацій ×2/×3 і якість 1–4, адаптація вимкнена явним `--quality`. Однаковий запис відтворюється `--pace` у темпі джерела після `--warmup`. У бюджет потрапляє лише вимір із хоча б одним кадром після прогріву. Подія `benchmark` з `"ok":true` публікується лише після сеансу без помилки; рядок стає застосовним, коли процес завершився кодом 0 і є виміряні кадри. «Застосувати вибране» переносить масштаб, якість і GPU лише з такого рядка. «Порівняти GPU» перевіряє карти послідовно. Очікування споживача має таймаут, прогін можна скасувати. Зупинка сеансу і бенчмарку йде `stop`, потім `terminate` і `kill`, і таймер діє лише для того запуску, який його поставив. Результат кожної карти пишеться окремим JSON поруч із параметрами джерела і версією FFmpeg. Адреса HLS для споживача — `http://хост:порт/index.m3u8`.
-
-Відповідність вимог і тестів: [docs/SPEC_MATRIX.md](docs/SPEC_MATRIX.md).
+Бенчмарк у вікні згорнутий. Валідний рядок — код виходу 0, `"ok":true` і хоча б один кадр після прогріву. Адреса споживача HLS у таблиці — HTTP-плейлист, не `hls://`.

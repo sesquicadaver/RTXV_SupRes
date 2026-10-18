@@ -50,4 +50,4 @@ jobs:
           $env:PKG_CONFIG_PATH = "$env:FFMPEG_ROOT\lib\pkgconfig"
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DRTX_CI_COMPILE_CHECK=ON "-DFFMPEG_ROOT=$env:FFMPEG_ROOT"
           cmake --build build --config Release
-          if (-not (Test-Path build/Release/rtx-vsr-proxy.exe)) { exit 1 }
+          if (-not (Test-Path build/Release/rtx-vsr-precheck.exe)) { exit 1 }
