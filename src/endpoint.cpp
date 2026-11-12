@@ -248,6 +248,8 @@ std::string build_location_url(const Endpoint& endpoint, const Mode& mode, std::
   if (proto == "hls" && mode.role == Role::Server) {
     return {};
   }
+  // FFmpeg читає плейлист HLS як HTTP(S), не як схему hls://.
+  const std::string scheme = (proto == "hls") ? "http" : proto;
   if (mode.role == Role::Listener || mode.role == Role::Server) {
     if (endpoint.local_port < 1) {
       error = "потрібен локальний порт";
@@ -257,10 +259,11 @@ std::string build_location_url(const Endpoint& endpoint, const Mode& mode, std::
     std::string path;
     if (proto == "rtmp" || proto == "rtmps" || proto == "rtmpt" || proto == "rtmpts") {
       path = "/" + endpoint.app + "/" + endpoint.playpath;
-    } else if (proto == "http" || proto == "https" || proto == "rtsp" || proto == "mmsh" || proto == "mmst") {
+    } else if (proto == "http" || proto == "https" || proto == "rtsp" || proto == "hls" || proto == "mmsh" ||
+               proto == "mmst") {
       path = with_slash(endpoint.path);
     }
-    return proto + "://" + hostport(host, endpoint.local_port) + path;
+    return scheme + "://" + hostport(host, endpoint.local_port) + path;
   }
   const int port = resolved_remote_port(endpoint);
   if (endpoint.remote_host.empty() || port < 1) {
@@ -274,7 +277,7 @@ std::string build_location_url(const Endpoint& endpoint, const Mode& mode, std::
              proto == "mmst") {
     path = endpoint.path.empty() ? std::string{} : with_slash(endpoint.path);
   }
-  return proto + "://" + hostport(endpoint.remote_host, port) + path;
+  return scheme + "://" + hostport(endpoint.remote_host, port) + path;
 }
 
 }  // namespace
@@ -425,6 +428,11 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
   if (!error.empty()) {
     return error;
   }
+  if (mode.container == "sdp" && mode.direction == Direction::Input) {
+    // SDP відкриває вкладені RTP/UDP; без whitelist FFmpeg відхиляє вкладені протоколи.
+    // Ставимо напряму: probe може не бачити цей ключ як format option.
+    built.format_options["protocol_whitelist"] = "file,crypto,data,udp,rtp,tcp,http,https,tls";
+  }
 
   if (endpoint.protocol == "udp" || endpoint.protocol == "udplite") {
     if (mode.direction == Direction::Input) {
@@ -471,7 +479,19 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
       built.sdp_path = endpoint.sdp;
     }
     if (endpoint.rtcp_port > 0) {
-      add_protocol_default(probe, mode, "rtcp_port", std::to_string(endpoint.rtcp_port), query, protocol_options);
+      // Слухач/сервер — лише локальний RTCP. Rendezvous — обидва. Клієнт — віддалений rtcpport.
+      if (mode.role == Role::Listener || mode.role == Role::Server) {
+        place_protocol(mode.protocol, query, protocol_options, "localrtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      } else if (mode.role == Role::Rendezvous) {
+        place_protocol(mode.protocol, query, protocol_options, "localrtcpport",
+                       std::to_string(endpoint.rtcp_port));
+        place_protocol(mode.protocol, query, protocol_options, "rtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      } else {
+        place_protocol(mode.protocol, query, protocol_options, "rtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      }
     }
     if (mode.direction == Direction::Output && endpoint.local_port > 0) {
       add_protocol_default(probe, mode, "local_rtpport", std::to_string(endpoint.local_port), query, protocol_options);
@@ -552,7 +572,8 @@ std::string rtp_container(const Endpoint& endpoint, Direction direction) {
 }
 
 std::string consumer_address(const Endpoint& endpoint) {
-  if (endpoint.protocol == "hls" && endpoint.role == "server") {
+  // «Адреса для споживача» — куди підключається клієнт плейлиста (наш HLS-сервер), не джерело входу.
+  if (endpoint.protocol == "hls" && (endpoint.role == "server" || endpoint.role == "listener")) {
     const std::string host = endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host;
     if (endpoint.local_port < 1) {
       return {};
@@ -572,6 +593,9 @@ std::string consumer_address(const Endpoint& endpoint) {
     if (at != std::string::npos && (slash == std::string::npos || at < slash)) {
       url = url.substr(0, authority) + url.substr(at + 1);
     }
+    if (url.rfind("hls://", 0) == 0) {
+      url.replace(0, 6, "http://");
+    }
     return url;
   }
   const bool local = endpoint.role == "server" || endpoint.role == "listener" || endpoint.role == "rendezvous";
@@ -581,6 +605,13 @@ std::string consumer_address(const Endpoint& endpoint) {
     return {};
   }
   url = endpoint.protocol + "://" + host + ":" + std::to_string(port);
+  if (endpoint.protocol == "rtmp" || endpoint.protocol == "rtmps" || endpoint.protocol == "rtmpt" ||
+      endpoint.protocol == "rtmpts") {
+    if (!endpoint.app.empty() || !endpoint.playpath.empty()) {
+      url += "/" + endpoint.app + "/" + endpoint.playpath;
+    }
+    return url;
+  }
   if (!endpoint.path.empty()) {
     if (endpoint.path.front() != '/') {
       url += '/';

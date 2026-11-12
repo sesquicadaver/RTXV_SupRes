@@ -1,3 +1,0 @@
-PLACEHOLDER
-Рядок конфігурації FFmpeg (без --enable-gpl і без --enable-nonfree):
-URL або шлях до відповідного вихідного коду FFmpeg:

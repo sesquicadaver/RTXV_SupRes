@@ -174,7 +174,7 @@ void collect_processes(HostFacts& host) {
       for (char& symbol : name) {
         symbol = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol)));
       }
-      if (name == "rtx-vsr-proxy.exe" || name == "rtx-vsr-gui.exe") {
+      if (name == "rtx-vsr.exe") {
         host.app_running = true;
         break;
       }

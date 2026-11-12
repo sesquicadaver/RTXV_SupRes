@@ -1,12 +1,13 @@
 # TODO / FIXME
 
-- Аудіо не передається.
 - Немає 10-бітного шляху і TrueHDR. Вхід, який NVDEC віддає не як NV12, зупиняє сеанс.
 - Після відкриття кодера роздільність не змінюється. Масштаб може впасти з 3 до 2 лише за виміром першого кадру, до `avio_open2`. Бенчмарк запускає окремий сеанс на кожну комбінацію.
 - `--self-check` вікна перевіряє наявність віджетів `start`, `gpu`, `profile`, `benchmark`. Збереження профілю, старт і зупинка сеансу цим режимом не покриті.
-- CUDA 13 несумісна з RTX Video SDK 1.1: ламає `NVSDK_NGX_CUDA_Init`. Потрібен CUDA Toolkit 12.x.
-- Job `windows-cuda` зупиняється на встановленні CUDA Toolkit (`Path Validation Error` у `Jimver/cuda-toolkit`) і до компіляції не доходить.
-- Windows CI не ставить Qt, тож GUI там не збирається. У workflow немає ISCC і перевірок встановлення, оновлення, відновлення й видалення. GUI, Unicode-шляхи, SDP/HLS і GPU-конвеєр на Windows 11 цим репозиторієм не підтверджені.
+- CUDA 13 несумісна з RTX Video SDK 1.1: ламає `NVSDK_NGX_CUDA_Init`. Потрібен CUDA Toolkit 12.x. `setup_build.ps1` не завантажує сам RTX Video SDK: його беруть з кабінету NVIDIA.
+- Job `windows-cuda` ставить CUDA через `Jimver/cuda-toolkit@v0.2.36` (`12.6.3`). Версії `0.2.25`…`0.2.28` на Windows падали на `Path Validation Error` у кеші ще до `nvcc`.
+- Hosted GitHub Actions зараз не стартують (`account is locked due to a billing issue`). Pin CUDA і product smoke перевіряються після розблокування білінгу або на VM.
+- `packaging/ffmpeg-lgpl.sha256` опційний: після першої довіреної загрузки FFmpeg збережіть туди SHA-256, інакше `setup_build.ps1` лише попереджає.
+- Windows CI не ставить Qt, тож `rtx-vsr.exe` там не збирається. У workflow немає ISCC і перевірок встановлення, оновлення, відновлення й видалення. Вікно й GPU-конвеєр на Windows 11 цим репозиторієм не підтверджені. Кириличні шляхи профілю, SDP whitelist, RTCP-ключі, HLS `http://`, RTMP consumer і console `stop` виправлені в коді.
 - HLS-сервер однопотоковий. Читання запиту має таймаут, але довгі відповіді блокують наступного клієнта.
 - SRT caller не має окремого локального порту, якщо його немає у зібраному FFmpeg. Rendezvous використовує один порт у URL.
 - Резервний шлях без VSR — найближчий сусід по NV12, не якісний масштабувальник. Колір при цьому лишається матрицею джерела.
