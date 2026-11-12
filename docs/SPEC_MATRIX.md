@@ -32,7 +32,13 @@
 | Елементарний RTP-вхід шукає режим SDP, MPEG-TS — демуксер `rtp` | `src/endpoint.cpp` | `tests/test_profile.cpp` (`rtp_container`) |
 | Валідний бенчмарк: код 0, `ok` і хоча б один кадр | `src/latency.hpp`, `src/pipeline.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp` (`benchmark_run_valid`) |
 | Час черги без паузи `--pace`; нуль зразків не входить у бюджет | `src/latency.hpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
-| HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` | `tests/test_profile.cpp` |
+| HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` (`build_location_url`, `consumer_address`) | `tests/test_profile.cpp` (server, client, legacy `hls://`) |
+| SDP-вхід має `protocol_whitelist` для вкладених RTP/UDP | `src/endpoint.cpp` | `build_endpoint` для `container=sdp` |
+| RTCP: listener/server → `localrtcpport`, client → `rtcpport` | `src/endpoint.cpp` | ключі FFmpeg rtp, не `rtcp_port` як local |
+| Адреса споживача RTMP включає `app`/`playpath` | `src/endpoint.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp`; `update_consumer` копіює поля |
+| Кириличні шляхи профілю через wide path, не `toStdString` | `src/gui/window.cpp` | `path_from_qstring` → `std::filesystem::path` |
+| `stop` на консольному stdin Windows | `src/platform.hpp` | `WaitForSingleObject` для `FILE_TYPE_CHAR`, `PeekNamedPipe` для pipe |
+| Бенчмарк перевіряє `password_access_error` до запису профілю | `src/gui/window.cpp` | `start_benchmark` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
 | Один застосунок `rtx-vsr.exe`: вікно і конвеєр, підсистема Windows, без консольного вікна | `src/main.cpp`, `src/gui/`, `CMakeLists.txt` (`WIN32`, `/ENTRY:mainCRTStartup`) | `gui_self_check` (`rtx-vsr --self-check`, `QT_QPA_PLATFORM=offscreen`). Подвійний клік не відкриває консоль |
 | Користувач обирає лише протокол; поля вводу змінює вікно | `src/gui/window.cpp` | список «Протокол»; `setRowVisible(QWidget*)` лишає поля цього протоколу |

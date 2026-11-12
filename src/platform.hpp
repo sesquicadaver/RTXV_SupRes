@@ -161,11 +161,25 @@ inline int poll_stdin_line(std::string& line, int timeout_ms) {
   static std::string pending;
 #if defined(_WIN32)
   const HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
-  DWORD available = 0;
-  if (handle == INVALID_HANDLE_VALUE || !PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) ||
-      available == 0) {
-    Sleep(static_cast<DWORD>(timeout_ms));
-    return 0;
+  if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+    return -1;
+  }
+  // PeekNamedPipe працює лише для pipe. Консоль (ярлик/cmd) — WaitForSingleObject.
+  const DWORD type = GetFileType(handle);
+  if (type == FILE_TYPE_CHAR) {
+    const DWORD wait = WaitForSingleObject(handle, static_cast<DWORD>(timeout_ms < 0 ? 0 : timeout_ms));
+    if (wait == WAIT_TIMEOUT) {
+      return 0;
+    }
+    if (wait != WAIT_OBJECT_0) {
+      return -1;
+    }
+  } else {
+    DWORD available = 0;
+    if (!PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) || available == 0) {
+      Sleep(static_cast<DWORD>(timeout_ms < 0 ? 0 : timeout_ms));
+      return 0;
+    }
   }
   char buffer[256];
   DWORD read = 0;

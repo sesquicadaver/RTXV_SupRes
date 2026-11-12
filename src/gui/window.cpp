@@ -4,6 +4,7 @@
 #include "latency.hpp"
 
 #include <algorithm>
+#include <filesystem>
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -546,6 +547,8 @@ void Window::build() {
   connect(output_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_local_host_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_path_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
+  connect(output_app_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
+  connect(output_playpath_, &QLineEdit::textChanged, this, [this](const QString&) { update_consumer(); });
   connect(output_port_, &QSpinBox::valueChanged, this, [this](int) {
     update_consumer();
     mark_dirty();
@@ -801,6 +804,19 @@ void Window::update_output_fields() {
   mark_dirty();
 }
 
+namespace {
+
+// toStdString() на Windows бере локальну кодову сторінку і ламає кирилицю в шляхах.
+std::filesystem::path path_from_qstring(const QString& text) {
+#if defined(_WIN32)
+  return std::filesystem::path(text.toStdWString());
+#else
+  return std::filesystem::path(text.toUtf8().constData());
+#endif
+}
+
+}  // namespace
+
 void Window::update_consumer() {
   const rtx::Profile profile = profile_from_form();
   if (profile.output.protocol == "file") {
@@ -815,6 +831,8 @@ void Window::update_consumer() {
   endpoint.local_host = profile.output.local_host;
   endpoint.local_port = profile.output.local_port;
   endpoint.path = profile.output.path;
+  endpoint.app = profile.output.app;
+  endpoint.playpath = profile.output.playpath;
   consumer_->setText(QString::fromStdString(rtx::consumer_address(endpoint)));
 }
 
@@ -1042,7 +1060,7 @@ bool Window::write_profile(const QString& path, QString& error, bool remember) {
     error = QString::fromStdString(failure);
     return false;
   }
-  if (!rtx::save_profile_file(path.toStdString(), profile, failure)) {
+  if (!rtx::save_profile_file(path_from_qstring(path), profile, failure)) {
     error = QString::fromStdString(failure);
     return false;
   }
@@ -1058,7 +1076,7 @@ bool Window::write_profile(const QString& path, QString& error, bool remember) {
 void Window::load_profile(const QString& path) {
   rtx::Profile profile;
   std::string error;
-  if (!rtx::load_profile_file(path.toStdString(), profile, error)) {
+  if (!rtx::load_profile_file(path_from_qstring(path), profile, error)) {
     status_->setText(QString::fromStdString(error));
     return;
   }
@@ -1189,8 +1207,12 @@ void Window::start_benchmark() {
   profile.input.protocol = "file";
   profile.input.role = "client";
   profile.input.path = bench_file_->text().trimmed().toStdString();
-  std::string failure;
-  if (!rtx::save_profile_file(path.toStdString(), profile, failure)) {
+  std::string failure = rtx::password_access_error(profile);
+  if (!failure.empty()) {
+    status_->setText(QString::fromStdString(failure));
+    return;
+  }
+  if (!rtx::save_profile_file(path_from_qstring(path), profile, failure)) {
     status_->setText(QString::fromStdString(failure));
     return;
   }
