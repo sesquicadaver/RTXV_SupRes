@@ -32,7 +32,7 @@
 | Елементарний RTP-вхід шукає режим SDP, MPEG-TS — демуксер `rtp` | `src/endpoint.cpp` | `tests/test_profile.cpp` (`rtp_container`) |
 | Валідний бенчмарк: код 0, `ok` і хоча б один кадр | `src/latency.hpp`, `src/pipeline.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp` (`benchmark_run_valid`) |
 | Час черги без паузи `--pace`; нуль зразків не входить у бюджет | `src/latency.hpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
-| HLS для споживача — HTTP плейлиста, не `hls://` | `src/endpoint.cpp` (`build_location_url`, `consumer_address`) | `tests/test_profile.cpp` (server, client, legacy `hls://`) |
+| HLS для споживача — HTTP плейлиста сервера, не `hls://` і не URL клієнта-джерела | `src/endpoint.cpp` (`build_location_url`, `consumer_address`) | `tests/test_profile.cpp` (server; client → порожньо; legacy `hls://` → http) |
 | SDP-вхід має `protocol_whitelist` для вкладених RTP/UDP | `src/endpoint.cpp` | `build_endpoint` для `container=sdp` |
 | RTCP: listener/server → `localrtcpport`, client → `rtcpport` | `src/endpoint.cpp` | ключі FFmpeg rtp, не `rtcp_port` як local |
 | Адреса споживача RTMP включає `app`/`playpath` | `src/endpoint.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp`; `update_consumer` копіює поля |

@@ -629,7 +629,7 @@ struct Session {
     }
     const AVStream* in_audio = input->streams[audio_index];
     const char* format_name = output->oformat->name != nullptr ? output->oformat->name : "";
-    if (std::string(format_name) == "rtp" || !muxer_carries_audio(format_name, in_audio->codecpar->codec_id)) {
+    if (!muxer_carries_audio(format_name, in_audio->codecpar->codec_id)) {
       std::cerr << "аудіо не вміщує цей вихід\n";
       return;
     }

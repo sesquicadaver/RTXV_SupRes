@@ -54,6 +54,9 @@ Source: "{#Dist}\components.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\components.json"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "{#Dist}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsourcedoesntexist
 Source: "{#Dist}\nvidia-driver.exe"; DestDir: "{tmp}"; Flags: dontcopy skipifsourcedoesntexist
+Source: "inno\verify-signature.ps1"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "inno\hash-sha256.ps1"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "inno\download-https.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
@@ -151,15 +154,37 @@ begin
   end;
 end;
 
+{ Подвоює " у аргументі командного рядка Windows. Не збирає -Command з конкатенації. }
+function QuoteArg(const Value: String): String;
+var
+  Index: Integer;
+begin
+  Result := '"';
+  for Index := 1 to Length(Value) do
+  begin
+    if Value[Index] = '"' then
+      Result := Result + '""'
+    else
+      Result := Result + Value[Index];
+  end;
+  Result := Result + '"';
+end;
+
+function PowerShellFile(const Script, Arguments: String; var Code: Integer): Boolean;
+begin
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -ExecutionPolicy Bypass -File ' + QuoteArg(ExpandConstant('{tmp}\') + Script) + ' ' + Arguments,
+    '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
 function SignatureValid(const Path: String): Boolean;
 var
   Code: Integer;
 begin
   Result := False;
   if not FileExists(Path) then Exit;
-  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-NoProfile -Command "if ((Get-AuthenticodeSignature -FilePath ''' + Path + ''').Status -eq ''Valid'') { exit 0 } else { exit 1 }"',
-      '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  if not TryExtract('verify-signature.ps1') then Exit;
+  if PowerShellFile('verify-signature.ps1', '-Path ' + QuoteArg(Path), Code) then
     Result := Code = 0;
 end;
 
@@ -175,14 +200,32 @@ end;
 function CaptureHash(const Path: String): String;
 var
   Code: Integer;
+  OutFile: String;
 begin
   Result := '';
-  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-NoProfile -Command "$hash = (Get-FileHash -Algorithm SHA256 -Path ''' + Path + ''').Hash.ToLowerInvariant(); [IO.File]::WriteAllBytes(''' + ExpandConstant('{tmp}\hash-only.txt') + ''', [Text.Encoding]::ASCII.GetBytes($hash))"',
-      '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  OutFile := ExpandConstant('{tmp}\hash-only.txt');
+  if not TryExtract('hash-sha256.ps1') then Exit;
+  if not PowerShellFile('hash-sha256.ps1', '-Path ' + QuoteArg(Path) + ' -OutFile ' + QuoteArg(OutFile), Code) then
     Exit;
   if Code = 0 then
-    Result := Lowercase(Trim(ReadAnsiFile(ExpandConstant('{tmp}\hash-only.txt'))));
+    Result := Lowercase(Trim(ReadAnsiFile(OutFile)));
+end;
+
+function HttpsUrlSafe(const Url: String): Boolean;
+var
+  Index: Integer;
+  Ch: Char;
+begin
+  Result := False;
+  if (Length(Url) < 9) or (Copy(Url, 1, 8) <> 'https://') then Exit;
+  for Index := 9 to Length(Url) do
+  begin
+    Ch := Url[Index];
+    if (Ch = '"') or (Ch = '''') or (Ch = '`') or (Ch = '$') or (Ch = ';') or (Ch = '|') or
+       (Ch = '&') or (Ch = #10) or (Ch = #13) then
+      Exit;
+  end;
+  Result := True;
 end;
 
 function CopyTree(const FromDir, ToDir: String): Boolean;
@@ -275,7 +318,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
   Report, Message, RuntimeChoice, DriverChoice, VcName, VcHash, DriverName, DriverUrl, DriverHash, Saved, SavedPhase: String;
-  VcPath, DriverPath, Download: String;
+  VcPath, DriverPath: String;
 begin
   Result := '';
   NeedsRestart := False;
@@ -360,11 +403,16 @@ begin
       end;
       DriverPath := ExpandConstant('{tmp}\') + DriverName;
     end
-    else if (Length(DriverUrl) > 8) and (Copy(DriverUrl, 1, 8) = 'https://') then
+    else if HttpsUrlSafe(DriverUrl) then
     begin
       DriverPath := ExpandConstant('{tmp}\nvidia-driver.exe');
-      Download := '-NoProfile -Command "Invoke-WebRequest -Uri ''' + DriverUrl + ''' -OutFile ''' + DriverPath + '''"';
-      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Download, '', SW_SHOW, ewWaitUntilTerminated, Code) or (Code <> 0) then
+      if not TryExtract('download-https.ps1') then
+      begin
+        Result := 'у пакеті немає модуля завантаження';
+        Exit;
+      end;
+      if (not PowerShellFile('download-https.ps1',
+          '-Uri ' + QuoteArg(DriverUrl) + ' -OutFile ' + QuoteArg(DriverPath), Code)) or (Code <> 0) then
       begin
         Result := 'офіційний драйвер не завантажено';
         Exit;

@@ -38,6 +38,8 @@ void bind_parent_console() {
   FILE* stream = nullptr;
   freopen_s(&stream, "CONOUT$", "w", stdout);
   freopen_s(&stream, "CONOUT$", "w", stderr);
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
   std::cout.clear();
   std::cerr.clear();
 #else

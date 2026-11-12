@@ -11,6 +11,10 @@ bool muxer_carries_audio(const std::string& format_name, int codec_id) {
   if (format_name.empty() || codec_id == AV_CODEC_ID_NONE) {
     return false;
   }
+  // Елементарний RTP несе один ES; окремий аудіопотік сюди не вміщується.
+  if (format_name == "rtp") {
+    return false;
+  }
   const AVOutputFormat* format = av_guess_format(format_name.c_str(), nullptr, nullptr);
   if (format == nullptr || format->audio_codec == AV_CODEC_ID_NONE) {
     return false;

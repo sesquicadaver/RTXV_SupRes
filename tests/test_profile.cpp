@@ -137,7 +137,7 @@ int main() {
   hls_client.remote_host = "192.168.1.10";
   hls_client.remote_port = 8080;
   hls_client.path = "/live/index.m3u8";
-  CHECK(rtx::consumer_address(hls_client) == "http://192.168.1.10:8080/live/index.m3u8");
+  CHECK(rtx::consumer_address(hls_client).empty());
   rtx::Endpoint hls_legacy;
   hls_legacy.url = "hls://192.168.1.10:8080/live/index.m3u8";
   CHECK(rtx::consumer_address(hls_legacy) == "http://192.168.1.10:8080/live/index.m3u8");

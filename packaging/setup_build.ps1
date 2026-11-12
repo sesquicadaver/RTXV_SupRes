@@ -62,6 +62,54 @@ function Install-WingetPackage([string]$Id, [string]$Override) {
   Refresh-Path
 }
 
+function Assert-AuthenticodeVendor([string]$Path, [string]$PublisherMatch) {
+  $signature = Get-AuthenticodeSignature -FilePath $Path
+  if ($signature.Status -ne "Valid") {
+    Stop-Setup 1 "немає чинного підпису: $Path"
+  }
+  $subject = [string]$signature.SignerCertificate.Subject
+  if ($subject -notmatch $PublisherMatch) {
+    Stop-Setup 1 "підпис не від очікуваного видавця ($PublisherMatch): $Path"
+  }
+}
+
+function Assert-Sha256([string]$Path, [string]$Expected) {
+  $actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+  if ($actual -ne $Expected.ToLowerInvariant()) {
+    Stop-Setup 1 "SHA-256 не збігся для $Path (очікувалось $Expected, отримано $actual)"
+  }
+}
+
+# Розпаковує zip лише якщо жоден запис не виходить за Dest через ..
+function Expand-ArchiveSafe([string]$Zip, [string]$Dest) {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $destFull = [IO.Path]::GetFullPath($Dest)
+  if (-not (Test-Path -LiteralPath $destFull)) {
+    New-Item -ItemType Directory -Force -Path $destFull | Out-Null
+  }
+  $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+  try {
+    foreach ($entry in $archive.Entries) {
+      if ([string]::IsNullOrEmpty($entry.FullName)) { continue }
+      $target = [IO.Path]::GetFullPath((Join-Path $destFull $entry.FullName))
+      if (-not $target.StartsWith($destFull, [StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Setup 1 "zip-slip у архіві: $($entry.FullName)"
+      }
+      if ($entry.FullName.EndsWith("/") -or $entry.FullName.EndsWith("\")) {
+        New-Item -ItemType Directory -Force -Path $target | Out-Null
+        continue
+      }
+      $parent = Split-Path -Parent $target
+      if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+      }
+      [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+    }
+  } finally {
+    $archive.Dispose()
+  }
+}
+
 function Assert-Windows11x64 {
   if (-not [Environment]::Is64BitOperatingSystem) {
     Stop-Setup 1 "потрібна 64-бітна Windows."
@@ -301,6 +349,8 @@ function Ensure-Cuda12 {
       Stop-Setup 1 "не вдалося завантажити CUDA Toolkit 12.6.3."
     }
   }
+  # Мережевий інсталятор NVIDIA змінює розмір між дзеркалами; довіра — Authenticode видавця.
+  Assert-AuthenticodeVendor $exe "NVIDIA"
   # Лише компілятор і runtime. Display.Driver сюди не входить: наявний драйвер не замінюється.
   $packages = @("nvcc_12.6", "cudart_12.6", "nvrtc_12.6", "nvrtc_dev_12.6", "visual_studio_integration_12.6", "thrust_12.6")
   Note "ставлю CUDA Toolkit 12.6 без драйвера дисплея"
@@ -343,15 +393,18 @@ function Ensure-Ffmpeg {
     Note "немає: FFmpeg LGPL (include і lib)"
     return $null
   }
-  Note "завантажую FFmpeg LGPL"
-  $releaseJson = (& curl.exe -fsSL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=30") -join "`n"
+  Note "завантажую FFmpeg LGPL (лише win64-lgpl-shared-7.1)"
+  $pinned = Join-Path $PSScriptRoot "ffmpeg-lgpl.sha256"
+  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+  $zip = Join-Path $dest "ffmpeg-lgpl.zip"
+  $url = $null
+  $releaseJson = (& curl.exe -fsSL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=40") -join "`n"
   if ($LASTEXITCODE -ne 0 -or -not $releaseJson) {
     Stop-Setup 1 "не вдалося знайти збірку FFmpeg LGPL."
   }
-  $url = $null
   foreach ($release in ($releaseJson | ConvertFrom-Json)) {
     foreach ($asset in $release.assets) {
-      if ($asset.name -like "*-win64-lgpl-shared-7.1.zip") {
+      if ($asset.name -like "ffmpeg-n7.1.*-win64-lgpl-shared-7.1.zip") {
         $url = $asset.browser_download_url
         break
       }
@@ -361,13 +414,19 @@ function Ensure-Ffmpeg {
   if (-not $url) {
     Stop-Setup 1 "немає архіву win64-lgpl-shared-7.1."
   }
-  New-Item -ItemType Directory -Force -Path $dest | Out-Null
-  $zip = Join-Path $dest "ffmpeg-lgpl.zip"
   & curl.exe -L --fail --retry 3 -o $zip $url
   if ($LASTEXITCODE -ne 0) {
     Stop-Setup 1 "не вдалося завантажити FFmpeg."
   }
-  Expand-Archive -Path $zip -DestinationPath $dest -Force
+  if (Test-Path -LiteralPath $pinned) {
+    $expected = (Get-Content -LiteralPath $pinned -Raw).Trim().ToLowerInvariant()
+    if ($expected -match '^[0-9a-f]{64}$') {
+      Assert-Sha256 $zip $expected
+    }
+  } else {
+    Note "немає packaging/ffmpeg-lgpl.sha256 — після довіреної загрузки збережіть SHA-256 у цей файл"
+  }
+  Expand-ArchiveSafe -Zip $zip -Dest $dest
   Remove-Item $zip -Force
   $header = Get-ChildItem $dest -Recurse -Filter "avformat.h" -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $header) {

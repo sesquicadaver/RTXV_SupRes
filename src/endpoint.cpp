@@ -479,11 +479,19 @@ std::string build_endpoint(const Endpoint& endpoint, const Mode& mode, const Opt
       built.sdp_path = endpoint.sdp;
     }
     if (endpoint.rtcp_port > 0) {
-      // Слухач/сервер — localrtcpport. Клієнт — віддалений rtcpport. Ключ rtcp_port у AVOption
-      // теж remote; для локального порту він не підходить.
-      const char* rtcp_key =
-          (mode.role == Role::Listener || mode.role == Role::Server) ? "localrtcpport" : "rtcpport";
-      place_protocol(mode.protocol, query, protocol_options, rtcp_key, std::to_string(endpoint.rtcp_port));
+      // Слухач/сервер — лише локальний RTCP. Rendezvous — обидва. Клієнт — віддалений rtcpport.
+      if (mode.role == Role::Listener || mode.role == Role::Server) {
+        place_protocol(mode.protocol, query, protocol_options, "localrtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      } else if (mode.role == Role::Rendezvous) {
+        place_protocol(mode.protocol, query, protocol_options, "localrtcpport",
+                       std::to_string(endpoint.rtcp_port));
+        place_protocol(mode.protocol, query, protocol_options, "rtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      } else {
+        place_protocol(mode.protocol, query, protocol_options, "rtcpport",
+                       std::to_string(endpoint.rtcp_port));
+      }
     }
     if (mode.direction == Direction::Output && endpoint.local_port > 0) {
       add_protocol_default(probe, mode, "local_rtpport", std::to_string(endpoint.local_port), query, protocol_options);
@@ -564,19 +572,17 @@ std::string rtp_container(const Endpoint& endpoint, Direction direction) {
 }
 
 std::string consumer_address(const Endpoint& endpoint) {
-  if (endpoint.protocol == "hls") {
-    const bool local = endpoint.role == "server" || endpoint.role == "listener";
-    const std::string host =
-        local ? (endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host) : endpoint.remote_host;
-    const int port = local ? endpoint.local_port : endpoint.remote_port;
-    if (host.empty() || port < 1) {
+  // «Адреса для споживача» — куди підключається клієнт плейлиста (наш HLS-сервер), не джерело входу.
+  if (endpoint.protocol == "hls" && (endpoint.role == "server" || endpoint.role == "listener")) {
+    const std::string host = endpoint.local_host.empty() ? "127.0.0.1" : endpoint.local_host;
+    if (endpoint.local_port < 1) {
       return {};
     }
     std::string path = endpoint.path.empty() ? "/index.m3u8" : endpoint.path;
     if (path.front() != '/') {
       path.insert(path.begin(), '/');
     }
-    return "http://" + host + ":" + std::to_string(port) + path;
+    return "http://" + host + ":" + std::to_string(endpoint.local_port) + path;
   }
   std::string url = endpoint.url;
   const auto scheme = url.find("://");
