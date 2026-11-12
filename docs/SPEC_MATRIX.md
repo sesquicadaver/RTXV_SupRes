@@ -23,7 +23,7 @@
 | Збірка Win32 без POSIX-сокетів | `src/platform.hpp`, `src/hls_server.cpp` | job `windows` у `.github/workflows/ci.yml` |
 | Перевірки тестів не залежать від `NDEBUG` | `tests/check.hpp` | `ctest` у Release |
 | `AVFrame::duration` лише з libavutil 58 | `src/pipeline.cpp` | компіляція на FFmpeg 4/5 (`pkt_duration`) і 6 |
-| Прапори C++ не потрапляють у nvcc; перевірка компіляції `.cu` не видає себе за SDK | `CMakeLists.txt`, `ci/compile_check/` | job `windows-cuda` (`RTX_CI_COMPILE_CHECK`). Окремого job `cuda-compile` немає |
+| Прапори C++ не потрапляють у nvcc; перевірка компіляції `.cu` не видає себе за SDK | `CMakeLists.txt`, `ci/compile_check/`, `.github/workflows/ci.yml` (`Jimver/cuda-toolkit@v0.2.36`, CUDA `12.6.3`) | job `windows-cuda` (`RTX_CI_COMPILE_CHECK`). Окремого job `cuda-compile` немає |
 | CUDA-контекст процесора закривається до звільнення `hw_device` | `src/pipeline.cpp` | порядок у `~Session()` |
 | Профіль JSON схеми 1, атомарний запис; відео з паролем відхиляється | `src/profile.cpp`, `src/pipeline.cpp` | `tests/test_profile.cpp` |
 | `doctor --json`; події стану й метрики на stdout; `stop` на stdin | `src/report.cpp`, `src/cli.cpp`, `src/pipeline.cpp` | `tests/test_profile.cpp`; `doctor --json` без SDK завершується кодом 3 |

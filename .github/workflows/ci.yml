@@ -32,7 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      - uses: Jimver/cuda-toolkit@v0.2.25
+      # v0.2.25…0.2.28 на Windows падають на Path Validation Error у кеші.
+      # З v0.2.29 GitHub-кеш на Windows вимкнено в самому action.
+      - uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.6.3"
           method: network
