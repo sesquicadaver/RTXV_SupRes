@@ -162,6 +162,19 @@ int main() {
   CHECK(!rtx::benchmark_run_valid(1, true, 8));
   CHECK(!rtx::benchmark_run_valid(0, false, 8));
   CHECK(!rtx::benchmark_run_valid(0, true, 0));
+  CHECK(rtx::kScaleProbeFrames == 3);
+  CHECK(!rtx::scale_probe_should_reduce(0, 3));
+  CHECK(!rtx::scale_probe_should_reduce(1, 3));
+  CHECK(rtx::scale_probe_should_reduce(2, 3));
+  CHECK(rtx::scale_probe_should_reduce(1, 1));
+  CHECK(!rtx::scale_probe_should_reduce(1, 0));
+  CHECK(rtx::nvenc_max_edge(false) == 4096);
+  CHECK(rtx::nvenc_max_edge(true) == 8192);
+  CHECK(rtx::nvenc_resolution_ok(3840, 2160, false));
+  CHECK(!rtx::nvenc_resolution_ok(3840 * 3, 2160 * 3, false));
+  CHECK(!rtx::nvenc_resolution_ok(3840 * 2, 2160 * 2, false));
+  CHECK(rtx::nvenc_resolution_ok(3840 * 2, 2160 * 2, true));
+  CHECK(!rtx::nvenc_resolution_ok(1921, 1080, false));
 
   rtx::Endpoint elementary;
   elementary.protocol = "rtp";

@@ -28,6 +28,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -483,28 +484,75 @@ struct Session {
     return frame;
   }
 
-  void maybe_reduce_scale(AVFrame* frame) {
-    if (active_scale != 3 || !quality.automatic() || frame == nullptr) {
+  void reopen_processor_scale(int scale) {
+    processor->close();
+    if (!processor->open(hw_device, decoder->width, decoder->height, scale, quality.quality())) {
+      throw std::runtime_error(processor->last_error());
+    }
+    active_scale = scale;
+  }
+
+  // Проба кількох кадрів (не одного cold-start): scale 3→2 лише при стійкому overrun.
+  void maybe_reduce_scale(const std::vector<AVFrame*>& frames) {
+    if (active_scale != 3 || !quality.automatic() || frames.empty()) {
       return;
     }
     AVFrame* scratch = make_scratch(processor->output_width(), processor->output_height());
-    double process_ms = 0;
-    const bool ok = scratch != nullptr && processor->process(frame, scratch, process_ms);
-    av_frame_free(&scratch);
-    if (!ok || process_ms <= budget_ms * 0.85) {
+    if (scratch == nullptr) {
       return;
     }
-    std::cerr << "масштаб 3 довший за бюджет кадру (" << process_ms << " мс), переходжу на 2\n";
-    processor->close();
-    if (!processor->open(hw_device, decoder->width, decoder->height, 2, quality.quality())) {
-      throw std::runtime_error(processor->last_error());
+    int slow = 0;
+    int samples = 0;
+    for (AVFrame* frame : frames) {
+      if (frame == nullptr) {
+        continue;
+      }
+      double process_ms = 0;
+      if (!processor->process(frame, scratch, process_ms)) {
+        continue;
+      }
+      ++samples;
+      if (process_ms > budget_ms * 0.85) {
+        ++slow;
+      }
     }
-    active_scale = 2;
+    av_frame_free(&scratch);
+    if (!scale_probe_should_reduce(slow, samples)) {
+      return;
+    }
+    std::cerr << "масштаб 3 довший за бюджет (" << slow << '/' << samples << " кадрів), переходжу на 2\n";
+    reopen_processor_scale(2);
+  }
+
+  // До avcodec_open2: 4K×3 і подібне не має доходити до NVENC з неясною помилкою FFmpeg.
+  void ensure_nvenc_limits(const Settings& settings) {
+    const bool hevc = settings.codec == "hevc";
+    auto fits = [&] {
+      return nvenc_resolution_ok(processor->output_width(), processor->output_height(), hevc);
+    };
+    if (fits()) {
+      return;
+    }
+    if (active_scale == 3) {
+      std::cerr << "масштаб 3 перевищує ліміт NVENC (" << nvenc_max_edge(hevc) << " на вісь), переходжу на 2\n";
+      reopen_processor_scale(2);
+      if (fits()) {
+        return;
+      }
+    }
+    throw std::runtime_error("вихід " + std::to_string(processor->output_width()) + "x" +
+                             std::to_string(processor->output_height()) + " перевищує ліміт NVENC " +
+                             std::to_string(nvenc_max_edge(hevc)) + " на вісь");
   }
 
   void open_encoder(const Settings& settings, BuiltEndpoint& built) {
     const int dst_w = processor->output_width();
     const int dst_h = processor->output_height();
+    if (!nvenc_resolution_ok(dst_w, dst_h, settings.codec == "hevc")) {
+      throw std::runtime_error("вихід " + std::to_string(dst_w) + "x" + std::to_string(dst_h) +
+                               " перевищує ліміт NVENC " +
+                               std::to_string(nvenc_max_edge(settings.codec == "hevc")) + " на вісь");
+    }
     const char* encoder_name = settings.codec == "hevc" ? "hevc_nvenc" : "h264_nvenc";
     const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
     if (codec == nullptr) {
@@ -1208,18 +1256,31 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     session.open_input(input_built, resolved);
     session.open_decoder(resolved);
     session.open_processor(resolved);
-    AVFrame* first = session.pull_one_frame();
-    if (first == nullptr) {
-      std::cerr << session.error << '\n';
-      return 1;
+    std::vector<AVFrame*> probe;
+    probe.reserve(static_cast<std::size_t>(kScaleProbeFrames));
+    for (int index = 0; index < kScaleProbeFrames; ++index) {
+      AVFrame* frame = session.pull_one_frame();
+      if (frame == nullptr) {
+        if (probe.empty()) {
+          std::cerr << session.error << '\n';
+          return 1;
+        }
+        break;
+      }
+      probe.push_back(frame);
     }
     try {
-      session.maybe_reduce_scale(first);
+      session.maybe_reduce_scale(probe);
+      session.ensure_nvenc_limits(resolved);
     } catch (...) {
-      free_frame(first);
+      for (AVFrame* frame : probe) {
+        free_frame(frame);
+      }
       throw;
     }
-    session.mailbox.publish(first);
+    for (AVFrame* frame : probe) {
+      session.mailbox.publish(frame);
+    }
     std::thread decoder([&session] { session.decode_loop(); });
     std::thread worker;
     try {
