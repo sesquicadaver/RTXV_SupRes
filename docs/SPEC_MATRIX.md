@@ -38,7 +38,7 @@
 | Адреса споживача RTMP включає `app`/`playpath` | `src/endpoint.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp`; `update_consumer` копіює поля |
 | Кириличні шляхи профілю/ФС через UTF-8 → wide path, не ACP/`toStdString` | `src/path_utf8.hpp`, `src/pipeline.cpp`, `src/endpoint.cpp`, `src/hls_server.cpp`, `src/metrics.cpp`, `src/gui/window.cpp` | `path_from_utf8` / `utf8_from_qstring`; профіль і метрики без `MoveFileExA` |
 | Stop у GUI не маскується під «Помилка запуску» | `src/gui/window.cpp`, `src/gui/window.hpp` | `stopping_`; після `request_stop` статус «Зупинено» |
-| HLS: потокова віддача, паралельні клієнти, очікування inflight на stop | `src/hls_server.cpp` | chunk 64 KiB; detach worker + `inflight_`; `wait_inflight` у `stop()` |
+| HLS: потокова віддача, паралельні клієнти, безпечний stop | `src/hls_server.cpp`, `src/platform.hpp` | chunk 64 KiB; `socket_wait_readable`; `shutdown`→`join`→`close`; `inflight_` |
 | Оновлення: backup → успіх DelTree / збій Restore | `packaging/rtx-vsr.iss` | `BackupId`, `RestoreBackup`, `CleanupBackup`, `DeinitializeSetup` |
 | `stop` на консольному stdin Windows | `src/platform.hpp` | `WaitForSingleObject` для `FILE_TYPE_CHAR`, `PeekNamedPipe` для pipe |
 | Бенчмарк перевіряє `password_access_error` до запису профілю | `src/gui/window.cpp` | `start_benchmark` |

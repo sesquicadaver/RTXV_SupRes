@@ -126,6 +126,7 @@ std::string request_path(std::intptr_t fd) {
 HlsServer::~HlsServer() { stop(); }
 
 bool HlsServer::start(const std::string& host, int port, const std::string& root, std::string& error) {
+  stop();
   socket_startup();
   std::error_code fs_error;
   const auto canonical_root = std::filesystem::weakly_canonical(path_from_utf8(root), fs_error);
@@ -163,32 +164,39 @@ bool HlsServer::start(const std::string& host, int port, const std::string& root
     return false;
   }
   listen_fd_ = fd;
-  running_.store(true);
+  running_.store(true, std::memory_order_release);
   thread_ = std::thread([this] { loop(); });
   return true;
 }
 
 void HlsServer::wait_inflight() {
   // Таймаути сокета клієнта — 2 с; чекаємо завершення віддачі сегментів.
-  for (int attempt = 0; attempt < 100 && inflight_.load() > 0; ++attempt) {
+  for (int attempt = 0; attempt < 100 && inflight_.load(std::memory_order_acquire) > 0; ++attempt) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 }
 
 void HlsServer::stop() {
-  running_.store(false);
+  // Не закриваємо listen до join: інакше accept/loop бачать -1 або чужий fd.
+  running_.store(false, std::memory_order_release);
   if (socket_ok(listen_fd_)) {
     socket_shutdown(listen_fd_);
-    socket_close(listen_fd_);
-    listen_fd_ = -1;
   }
   if (thread_.joinable()) {
     thread_.join();
+  }
+  if (socket_ok(listen_fd_)) {
+    socket_close(listen_fd_);
+    listen_fd_ = -1;
   }
   wait_inflight();
 }
 
 void HlsServer::serve_client(std::intptr_t client) {
+  if (!running_.load(std::memory_order_acquire)) {
+    socket_close(client);
+    return;
+  }
   socket_timeouts(client, 2000, 2000);
   const std::string raw = request_path(client);
   if (raw.empty() || raw.find("..") != std::string::npos || raw.front() != '/') {
@@ -206,27 +214,38 @@ void HlsServer::serve_client(std::intptr_t client) {
     socket_close(client);
     return;
   }
+  if (!running_.load(std::memory_order_acquire)) {
+    socket_close(client);
+    return;
+  }
   respond_file(client, canonical);
   socket_close(client);
 }
 
 void HlsServer::loop() {
-  while (running_.load()) {
-    const std::intptr_t client = socket_accept(listen_fd_);
-    if (!socket_ok(client)) {
-      if (!running_.load()) {
-        break;
-      }
+  while (running_.load(std::memory_order_acquire)) {
+    if (!socket_ok(listen_fd_)) {
+      break;
+    }
+    // Poll з таймаутом: stop() робить shutdown, але не покладаємось лише на нього.
+    if (!socket_wait_readable(listen_fd_, 200)) {
       continue;
     }
-    if (!running_.load()) {
+    if (!running_.load(std::memory_order_acquire)) {
+      break;
+    }
+    const std::intptr_t client = socket_accept(listen_fd_);
+    if (!socket_ok(client)) {
+      continue;
+    }
+    if (!running_.load(std::memory_order_acquire)) {
       socket_close(client);
       break;
     }
-    inflight_.fetch_add(1);
+    inflight_.fetch_add(1, std::memory_order_acq_rel);
     std::thread([this, client] {
       serve_client(client);
-      inflight_.fetch_sub(1);
+      inflight_.fetch_sub(1, std::memory_order_acq_rel);
     }).detach();
   }
 }
