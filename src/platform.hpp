@@ -138,6 +138,26 @@ inline std::intptr_t socket_accept(std::intptr_t fd) {
 #endif
 }
 
+// true — є вхідне з'єднання або подія на fd; false — таймаут / помилка / невалідний fd.
+inline bool socket_wait_readable(std::intptr_t fd, int timeout_ms) {
+  if (!socket_ok(fd)) {
+    return false;
+  }
+#if defined(_WIN32)
+  WSAPOLLFD pollfd {};
+  pollfd.fd = static_cast<SOCKET>(fd);
+  pollfd.events = POLLIN;
+  const int ready = ::WSAPoll(&pollfd, 1, timeout_ms);
+  return ready > 0 && (pollfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+#else
+  pollfd descriptor {};
+  descriptor.fd = static_cast<int>(fd);
+  descriptor.events = POLLIN;
+  const int ready = ::poll(&descriptor, 1, timeout_ms);
+  return ready > 0 && (descriptor.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+#endif
+}
+
 inline long socket_send(std::intptr_t fd, const char* data, std::size_t size) {
   const int chunk = static_cast<int>(size > 1048576 ? 1048576 : size);
 #if defined(_WIN32)
