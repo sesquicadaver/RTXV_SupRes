@@ -3,6 +3,7 @@
 #include "catalog.hpp"
 #include "dependencies.hpp"
 #include "install_check.hpp"
+#include "path_utf8.hpp"
 #include "pipeline.hpp"
 #include "profile.hpp"
 #include "report.hpp"
@@ -406,7 +407,7 @@ int cli_main(int argc, char** argv) {
   if (!profile_path.empty()) {
     Profile profile;
     std::string error;
-    if (!load_profile_file(profile_path, profile, error)) {
+    if (!load_profile_file(path_from_utf8(profile_path), profile, error)) {
       std::cerr << error << '\n';
       return 2;
     }

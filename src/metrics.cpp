@@ -1,8 +1,12 @@
 #include "metrics.hpp"
 
+#include "path_utf8.hpp"
+
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <system_error>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -68,9 +72,11 @@ bool write_metrics_file(const std::string& path, const Metrics& metrics) {
   if (path.empty()) {
     return true;
   }
-  const std::string tmp = path + ".tmp";
+  const std::filesystem::path target = path_from_utf8(path);
+  std::filesystem::path temporary = target;
+  temporary += ".tmp";
   {
-    std::ofstream file(tmp, std::ios::trunc);
+    std::ofstream file(temporary, std::ios::trunc);
     if (!file) {
       return false;
     }
@@ -78,14 +84,18 @@ bool write_metrics_file(const std::string& path, const Metrics& metrics) {
   }
 #ifdef _WIN32
   // Microsoft CRT: std::rename не замінює вже наявний файл призначення.
-  const BOOL replaced = MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+  const BOOL replaced = MoveFileExW(temporary.c_str(), target.c_str(),
+                                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
   if (replaced == 0) {
-    std::remove(tmp.c_str());
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
     return false;
   }
 #else
-  if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-    std::remove(tmp.c_str());
+  std::error_code failure;
+  std::filesystem::rename(temporary, target, failure);
+  if (failure) {
+    std::filesystem::remove(temporary, failure);
     return false;
   }
 #endif

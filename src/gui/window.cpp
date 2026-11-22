@@ -266,11 +266,17 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     journal_->appendPlainText(QString::fromUtf8(proxy_->readAllStandardError()).trimmed());
   });
   connect(proxy_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
+    const bool user_stop = stopping_;
+    stopping_ = false;
     running_ = false;
     start_->setText("Запустити");
     gpu_->setEnabled(true);
     refresh_gpu_->setEnabled(true);
     bench_run_->setEnabled(true);
+    if (user_stop) {
+      status_->setText("Зупинено");
+      return;
+    }
     if (status_->text().startsWith("Помилка") || code == 0) {
       return;
     }
@@ -280,6 +286,7 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     if (error != QProcess::FailedToStart) {
       return;
     }
+    stopping_ = false;
     running_ = false;
     start_->setText("Запустити");
     gpu_->setEnabled(true);
@@ -806,7 +813,9 @@ void Window::update_output_fields() {
 
 namespace {
 
-// toStdString() на Windows бере локальну кодову сторінку і ламає кирилицю в шляхах.
+// Шляхи в профілі — UTF-8. toStdString() на Windows дає ACP і ламає кирилицю.
+std::string utf8_from_qstring(const QString& text) { return std::string(text.toUtf8().constData()); }
+
 std::filesystem::path path_from_qstring(const QString& text) {
 #if defined(_WIN32)
   return std::filesystem::path(text.toStdWString());
@@ -886,10 +895,10 @@ rtx::Profile Window::profile_from_form() const {
       profile.output.payload = container == "rtp" ? profile.codec : "mpegts";
     }
     if (output_path_->isVisible()) {
-      profile.output.path = output_path_->text().trimmed().toStdString();
+      profile.output.path = utf8_from_qstring(output_path_->text().trimmed());
     }
     if (output_sdp_->isVisible()) {
-      profile.output.sdp = output_sdp_->text().trimmed().toStdString();
+      profile.output.sdp = utf8_from_qstring(output_sdp_->text().trimmed());
     }
     if (output_app_->isVisible()) {
       profile.output.app = output_app_->text().trimmed().toStdString();
@@ -898,7 +907,7 @@ rtx::Profile Window::profile_from_form() const {
       profile.output.playpath = output_playpath_->text().trimmed().toStdString();
     }
     if (output_directory_->isVisible()) {
-      profile.output.directory = output_directory_->text().trimmed().toStdString();
+      profile.output.directory = utf8_from_qstring(output_directory_->text().trimmed());
     }
     if (output_rtcp_->isVisible()) {
       profile.output.rtcp_port = output_rtcp_->value() > 0 ? output_rtcp_->value() : -1;
@@ -964,7 +973,7 @@ rtx::Profile Window::profile_from_form() const {
       profile.input.local_port = input_local_port_->value() > 0 ? input_local_port_->value() : -1;
     }
     if (input_path_->isVisible()) {
-      profile.input.path = input_path_->text().trimmed().toStdString();
+      profile.input.path = utf8_from_qstring(input_path_->text().trimmed());
     }
     if (input_app_->isVisible()) {
       profile.input.app = input_app_->text().trimmed().toStdString();
@@ -1137,6 +1146,7 @@ void Window::start_proxy() {
   }
   journal_->clear();
   status_->setText("Підключення");
+  stopping_ = false;
   running_ = true;
   start_->setText("Зупинити");
   gpu_->setEnabled(false);
@@ -1148,10 +1158,13 @@ void Window::start_proxy() {
 
 void Window::stop_proxy() {
   if (proxy_->state() == QProcess::NotRunning) {
+    stopping_ = false;
     running_ = false;
     start_->setText("Запустити");
+    status_->setText("Зупинено");
     return;
   }
+  stopping_ = true;
   status_->setText("Зупинено");
   request_stop(proxy_, proxy_token_, &proxy_token_);
 }
@@ -1206,7 +1219,7 @@ void Window::start_benchmark() {
   profile.input = {};
   profile.input.protocol = "file";
   profile.input.role = "client";
-  profile.input.path = bench_file_->text().trimmed().toStdString();
+  profile.input.path = utf8_from_qstring(bench_file_->text().trimmed());
   std::string failure = rtx::password_access_error(profile);
   if (!failure.empty()) {
     status_->setText(QString::fromStdString(failure));

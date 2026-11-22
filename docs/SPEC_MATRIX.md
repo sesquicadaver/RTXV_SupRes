@@ -36,7 +36,10 @@
 | SDP-вхід має `protocol_whitelist` для вкладених RTP/UDP | `src/endpoint.cpp` | `build_endpoint` для `container=sdp` |
 | RTCP: listener/server → `localrtcpport`, client → `rtcpport` | `src/endpoint.cpp` | ключі FFmpeg rtp, не `rtcp_port` як local |
 | Адреса споживача RTMP включає `app`/`playpath` | `src/endpoint.cpp`, `src/gui/window.cpp` | `tests/test_profile.cpp`; `update_consumer` копіює поля |
-| Кириличні шляхи профілю через wide path, не `toStdString` | `src/gui/window.cpp` | `path_from_qstring` → `std::filesystem::path` |
+| Кириличні шляхи профілю/ФС через UTF-8 → wide path, не ACP/`toStdString` | `src/path_utf8.hpp`, `src/pipeline.cpp`, `src/endpoint.cpp`, `src/hls_server.cpp`, `src/metrics.cpp`, `src/gui/window.cpp` | `path_from_utf8` / `utf8_from_qstring`; профіль і метрики без `MoveFileExA` |
+| Stop у GUI не маскується під «Помилка запуску» | `src/gui/window.cpp`, `src/gui/window.hpp` | `stopping_`; після `request_stop` статус «Зупинено» |
+| HLS: потокова віддача, паралельні клієнти, очікування inflight на stop | `src/hls_server.cpp` | chunk 64 KiB; detach worker + `inflight_`; `wait_inflight` у `stop()` |
+| Оновлення: backup → успіх DelTree / збій Restore | `packaging/rtx-vsr.iss` | `BackupId`, `RestoreBackup`, `CleanupBackup`, `DeinitializeSetup` |
 | `stop` на консольному stdin Windows | `src/platform.hpp` | `WaitForSingleObject` для `FILE_TYPE_CHAR`, `PeekNamedPipe` для pipe |
 | Бенчмарк перевіряє `password_access_error` до запису профілю | `src/gui/window.cpp` | `start_benchmark` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |

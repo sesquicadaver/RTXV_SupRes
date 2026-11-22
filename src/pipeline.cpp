@@ -10,6 +10,7 @@
 #include "latency.hpp"
 #include "mailbox.hpp"
 #include "metrics.hpp"
+#include "path_utf8.hpp"
 #include "platform.hpp"
 #include "json_mini.hpp"
 #include "report.hpp"
@@ -186,8 +187,8 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
   if (input.ffmpeg_url.empty() || output.ffmpeg_url.empty()) {
     return {};
   }
-  const fs::path in_path(input.ffmpeg_url);
-  const fs::path out_path(output.ffmpeg_url);
+  const fs::path in_path = path_from_utf8(input.ffmpeg_url);
+  const fs::path out_path = path_from_utf8(output.ffmpeg_url);
   if (!fs::is_regular_file(in_path, error)) {
     return {};
   }
@@ -202,14 +203,15 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
 void prepare_hls(BuiltEndpoint& output, HlsServer& server) {
   namespace fs = std::filesystem;
   if (output.serve_root.empty()) {
-    output.serve_root = (fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(process_id()))).string();
+    output.serve_root = utf8_from_path(fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(process_id())));
   }
-  fs::create_directories(output.serve_root);
-  output.ffmpeg_url = (fs::path(output.serve_root) / "index.m3u8").string();
+  const fs::path root = path_from_utf8(output.serve_root);
+  fs::create_directories(root);
+  output.ffmpeg_url = utf8_from_path(root / "index.m3u8");
   output.format_options.emplace("hls_time", "1");
   output.format_options.emplace("hls_list_size", "3");
   output.format_options.emplace("hls_flags", "delete_segments+append_list+omit_endlist+independent_segments");
-  output.format_options.emplace("hls_segment_filename", (fs::path(output.serve_root) / "seg_%05d.ts").string());
+  output.format_options.emplace("hls_segment_filename", utf8_from_path(root / "seg_%05d.ts"));
   std::string error;
   if (!server.start(output.serve_host, output.serve_port, output.serve_root, error)) {
     throw std::runtime_error(error);
@@ -611,7 +613,7 @@ struct Session {
     char buffer[8192];
     AVFormatContext* contexts[] = {output};
     throw_if(av_sdp_create(contexts, 1, buffer, static_cast<int>(sizeof(buffer))), "SDP");
-    const std::filesystem::path path(sdp_path);
+    const std::filesystem::path path = path_from_utf8(sdp_path);
     if (path.has_parent_path()) {
       std::filesystem::create_directories(path.parent_path());
     }
@@ -1174,7 +1176,7 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     if (output_built.application_hls) {
       prepare_hls(output_built, hls);
     } else if (settings.output.protocol == "file") {
-      const std::filesystem::path parent = std::filesystem::path(output_built.ffmpeg_url).parent_path();
+      const std::filesystem::path parent = path_from_utf8(output_built.ffmpeg_url).parent_path();
       if (!parent.empty()) {
         std::filesystem::create_directories(parent);
       }

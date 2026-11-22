@@ -69,6 +69,7 @@ Name: "desktopicon"; Description: "Ярлик на робочому столі";
 var
   BackupId: String;
   CustomExitCode: Integer;
+  InstallSucceeded: Boolean;
 
 function GetTickCount: Cardinal;
 external 'GetTickCount@kernel32.dll stdcall';
@@ -81,6 +82,10 @@ end;
 
 function InitializeSetup: Boolean;
 begin
+  InstallSucceeded := False;
+  CustomExitCode := 0;
+  BackupId := '';
+  RegQueryStringValue(HKLM, 'Software\RTX VSR', 'BackupId', BackupId);
   Result := True;
 end;
 
@@ -455,11 +460,14 @@ begin
     BackupId := GetDateTimeString('yyyymmddhhnnss', #0, #0) + '-' + IntToStr(GetTickCount);
     if not CopyTree(ExpandConstant('{app}'), BackupPath) then
     begin
+      BackupId := '';
       Result := 'не вдалося зберегти попередню версію';
       Exit;
     end;
     if not SaveStringToFile(BackupPath + '\backup.id', BackupId, False) then
     begin
+      DelTree(BackupPath, True, True, True);
+      BackupId := '';
       Result := 'не вдалося позначити резервну копію';
       Exit;
     end;
@@ -468,15 +476,52 @@ begin
   RegDeleteValue(HKLM, 'Software\RTX VSR', 'ResumePhase');
 end;
 
+procedure CleanupBackup;
+begin
+  if BackupId = '' then Exit;
+  if DirExists(BackupPath) then
+    DelTree(BackupPath, True, True, True);
+  RegDeleteValue(HKLM, 'Software\RTX VSR', 'BackupId');
+  BackupId := '';
+end;
+
+function RestoreBackup: Boolean;
+begin
+  Result := False;
+  if BackupId = '' then
+    RegQueryStringValue(HKLM, 'Software\RTX VSR', 'BackupId', BackupId);
+  if (BackupId = '') or (not DirExists(BackupPath)) then Exit;
+  ForceDirectories(ExpandConstant('{app}'));
+  Result := CopyTree(BackupPath, ExpandConstant('{app}'));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then Exit;
   { GPU, драйвер і VSR тут не перевіряються: без карти програма все одно має лишитися встановленою. }
+  InstallSucceeded := True;
   RegWriteStringValue(HKLM, 'Software\RTX VSR', 'InstallStatus', 'ok');
-  if BackupId <> '' then
+  CleanupBackup;
+end;
+
+procedure DeinitializeSetup;
+begin
+  if BackupId = '' then
+    RegQueryStringValue(HKLM, 'Software\RTX VSR', 'BackupId', BackupId);
+  if BackupId = '' then Exit;
+  if InstallSucceeded then
   begin
-    DelTree(BackupPath, True, True, True);
-    RegDeleteValue(HKLM, 'Software\RTX VSR', 'BackupId');
-    BackupId := '';
+    CleanupBackup;
+    Exit;
+  end;
+  { Скасування або збій після резервної копії — відкат каталогу {app}. }
+  if RestoreBackup then
+    CleanupBackup
+  else
+  begin
+    CustomExitCode := 1;
+    if not WizardSilent then
+      MsgBox('Не вдалося відновити попередню версію з резервної копії. Каталог: ' + BackupPath,
+        mbError, MB_OK);
   end;
 end;

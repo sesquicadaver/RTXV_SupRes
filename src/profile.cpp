@@ -119,7 +119,8 @@ ProfileEndpoint capture_endpoint(const Endpoint& endpoint) {
 }
 
 bool atomic_write(const std::filesystem::path& path, const std::string& body, std::string& error) {
-  const std::filesystem::path temporary = path.string() + ".tmp";
+  std::filesystem::path temporary = path;
+  temporary += ".tmp";
   {
     std::ofstream file(temporary, std::ios::trunc);
     if (!file) {

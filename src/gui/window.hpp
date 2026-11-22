@@ -147,6 +147,7 @@ class Window : public QMainWindow {
   QByteArray bench_stdout_;
   QString bench_wait_reason_;
   bool running_ = false;
+  bool stopping_ = false;
   bool bench_abort_ = false;
   bool bench_settled_ = false;
   quint64 proxy_token_ = 0;

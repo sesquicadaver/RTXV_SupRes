@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <thread>
 
@@ -20,10 +21,13 @@ class HlsServer {
 
  private:
   void loop();
+  void serve_client(std::intptr_t client);
+  void wait_inflight();
 
   std::atomic<bool> running_{false};
+  std::atomic<int> inflight_{0};
   std::intptr_t listen_fd_ = -1;
-  std::string root_;
+  std::filesystem::path root_;
   std::thread thread_;
 };
 

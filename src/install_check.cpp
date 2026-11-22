@@ -3,6 +3,7 @@
 #include "catalog.hpp"
 #include "dependencies.hpp"
 #include "json_mini.hpp"
+#include "path_utf8.hpp"
 #include "pipeline.hpp"
 
 #include <filesystem>
@@ -105,14 +106,14 @@ int run_install_check(const std::string& clip, const std::string& directory) {
     return 2;
   }
   std::error_code exists_error;
-  if (!std::filesystem::is_regular_file(clip, exists_error) || exists_error) {
+  if (!std::filesystem::is_regular_file(path_from_utf8(clip), exists_error) || exists_error) {
     std::cerr << "тестовий запис не знайдено\n";
     return 2;
   }
   const DependencyReport report = inspect_dependencies();
   const std::filesystem::path root = directory.empty()
                                          ? std::filesystem::temp_directory_path() / "rtx-vsr-install-check"
-                                         : std::filesystem::path(directory);
+                                         : path_from_utf8(directory);
   std::error_code directory_error;
   std::filesystem::create_directories(root, directory_error);
   const std::vector<Mode> modes = discover_modes();
@@ -136,9 +137,8 @@ int run_install_check(const std::string& clip, const std::string& directory) {
       settings.input.path = clip;
       settings.output.protocol = "file";
       settings.output.role = "client";
-      settings.output.path =
-          (root / ("check-" + safe_component(gpu.uuid.empty() ? std::to_string(gpu.index) : gpu.uuid) + ".ts"))
-              .string();
+      settings.output.path = utf8_from_path(
+          root / ("check-" + safe_component(gpu.uuid.empty() ? std::to_string(gpu.index) : gpu.uuid) + ".ts"));
       settings.output_format = "mpegts";
       settings.codec = "h264";
       settings.scale = 2;

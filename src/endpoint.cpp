@@ -1,5 +1,7 @@
 #include "endpoint.hpp"
 
+#include "path_utf8.hpp"
+
 #include <cctype>
 #include <filesystem>
 #include <map>
@@ -398,14 +400,14 @@ std::string validate_endpoint(const Endpoint& endpoint, const Mode& mode) {
   }
   if (endpoint.protocol == "file" && mode.direction == Direction::Input) {
     std::error_code error;
-    const std::filesystem::path file(endpoint.path);
+    const std::filesystem::path file = path_from_utf8(endpoint.path);
     if (!std::filesystem::is_regular_file(file, error) || error) {
       return "вхідний файл не знайдено";
     }
   }
   if (mode.container == "sdp" && mode.direction == Direction::Input) {
     std::error_code error;
-    const std::filesystem::path file(endpoint.path);
+    const std::filesystem::path file = path_from_utf8(endpoint.path);
     if (!std::filesystem::is_regular_file(file, error) || error) {
       return "файл SDP не знайдено";
     }
