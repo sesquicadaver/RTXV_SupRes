@@ -2,12 +2,14 @@
 #include "cli.hpp"
 #include "dependencies.hpp"
 #include "endpoint.hpp"
+#include "json_mini.hpp"
 #include "latency.hpp"
 #include "profile.hpp"
 #include "report.hpp"
 
 #include <chrono>
 #include <filesystem>
+#include <string>
 
 int main() {
   const rtx::UrlSecret parts = rtx::split_url_secret("rtsp://user:secret@192.168.1.20:554/live");
@@ -162,6 +164,9 @@ int main() {
   CHECK(!rtx::benchmark_run_valid(1, true, 8));
   CHECK(!rtx::benchmark_run_valid(0, false, 8));
   CHECK(!rtx::benchmark_run_valid(0, true, 0));
+  CHECK(rtx::json_escape(std::string("a\"b\\c")) == "a\\\"b\\\\c");
+  CHECK(rtx::json_escape(std::string("\n\t")) == "\\n\\t");
+  CHECK(rtx::json_escape(std::string(1, '\x01')) == "\\u0001");
   CHECK(rtx::kScaleProbeFrames == 3);
   CHECK(!rtx::scale_probe_should_reduce(0, 3));
   CHECK(!rtx::scale_probe_should_reduce(1, 3));

@@ -42,6 +42,10 @@
 | Фінальний drain NVENC не піднімає `running` (interrupt лишається чутливим) | `src/pipeline.cpp` | `drain_encoder(true)` без `running=true` |
 | Опис GPU у вікні без повторного doctor/SDK на кожну зміну combo | `src/gui/window.cpp` | `check_selected_gpu` з кешу `doctor_`; повний probe — `reload_gpus` |
 | Черга аудіо: ліміт пакетів і вікно PTS | `src/audio_copy.cpp`, `src/pipeline.cpp` | `audio_pts_outside_budget`, `kAudioQueueMaxSeconds` |
+| JSON escape зберігає control bytes як `\u00XX` | `src/json_mini.cpp` | `tests/test_profile.cpp` |
+| Метрики на диск з flush перед rename | `src/metrics.cpp` | `FlushFileBuffers` / `fsync` |
+| Закриття вікна не блокує UI на `waitForFinished` | `src/gui/window.cpp` | `closing_` + `request_stop`; повторний `close()` після finished |
+| Delay-load `nvcuda.dll` з failure hook | `src/delay_load_hook.cpp`, `CMakeLists.txt` | `__pfnDliFailureHook2` |
 | HLS: потокова віддача, паралельні клієнти, безпечний stop | `src/hls_server.cpp`, `src/platform.hpp` | chunk 64 KiB; `socket_wait_readable`; `shutdown`→`join`→`close`; `inflight_` |
 | Оновлення: backup → успіх DelTree / збій Restore | `packaging/rtx-vsr.iss` | `BackupId`, `RestoreBackup`, `CleanupBackup`, `DeinitializeSetup` |
 | `stop` на консольному stdin Windows | `src/platform.hpp` | `WaitForSingleObject` для `FILE_TYPE_CHAR`, `PeekNamedPipe` для pipe |

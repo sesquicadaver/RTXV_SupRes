@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 namespace rtx {
@@ -250,7 +251,7 @@ bool Json::bool_or(const std::string& key, bool fallback) const {
 
 std::string json_escape(const std::string& text) {
   std::string out;
-  out.reserve(text.size());
+  out.reserve(text.size() + 8);
   for (const unsigned char ch : text) {
     switch (ch) {
       case '\\':
@@ -258,6 +259,12 @@ std::string json_escape(const std::string& text) {
         break;
       case '"':
         out += "\\\"";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
         break;
       case '\n':
         out += "\\n";
@@ -270,9 +277,12 @@ std::string json_escape(const std::string& text) {
         break;
       default:
         if (ch < 0x20) {
-          break;
+          char buffer[8];
+          std::snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
+          out += buffer;
+        } else {
+          out += static_cast<char>(ch);
         }
-        out += static_cast<char>(ch);
         break;
     }
   }

@@ -76,7 +76,7 @@ external 'GetTickCount@kernel32.dll stdcall';
 
 function GetCustomSetupExitCode: Integer;
 begin
-  { 0 лишає код Inno, зокрема перезапуск. Ненульове значення — помилка після копіювання. }
+  { Callback Inno Setup (не мертвий код): 0 — стандартний код Inno/reboot; >0 — наш збій, напр. restore. }
   Result := CustomExitCode;
 end;
 
