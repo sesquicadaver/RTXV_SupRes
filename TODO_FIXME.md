@@ -7,7 +7,7 @@
 - Job `windows-cuda` ставить CUDA через `Jimver/cuda-toolkit@v0.2.36` (`12.6.3`). Версії `0.2.25`…`0.2.28` на Windows падали на `Path Validation Error` у кеші ще до `nvcc`.
 - Hosted GitHub Actions зараз не стартують (`account is locked due to a billing issue`). Pin CUDA і product smoke перевіряються після розблокування білінгу або на VM.
 - `packaging/ffmpeg-lgpl.sha256` опційний: після першої довіреної загрузки FFmpeg збережіть туди SHA-256, інакше `setup_build.ps1` лише попереджає.
-- Windows CI не ставить Qt; ISCC/GUI smoke — на VM. HIGH/MEDIUM/LOW і спільний `packaging/runtime_required.txt` для deploy/stage — у коді. God-object `window.cpp` лишається WATCH.
+- Windows CI не ставить Qt; ISCC/GUI smoke — на VM. Рев’ю-черга (HIGH/MEDIUM/LOW + runtime manifest + split GUI) — у коді. God-object `window.cpp` рознесено на `window_profile` / `window_benchmark` / `window_helpers`.
 - Hosted CI ігноруємо за домовленістю; product smoke — локально на Windows 11 після `build_setup.ps1`.
 - SRT caller не має окремого локального порту, якщо його немає у зібраному FFmpeg. Rendezvous використовує один порт у URL.
 - Резервний шлях без VSR — найближчий сусід по NV12, не якісний масштабувальник. Колір при цьому лишається матрицею джерела.
