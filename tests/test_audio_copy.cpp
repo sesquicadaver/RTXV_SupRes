@@ -20,5 +20,10 @@ int main() {
   // rtp_mpegts — MPEG-TS у RTP; аудіо в TS можливе, якщо муксер FFmpeg його приймає.
   const bool rtp_mpegts = rtx::muxer_carries_audio("rtp_mpegts", AV_CODEC_ID_AAC);
   (void)rtp_mpegts;
+  CHECK(rtx::kAudioQueueMaxPackets == 64);
+  CHECK(!rtx::audio_pts_outside_budget(AV_NOPTS_VALUE, 1000, 1.0 / 48000.0));
+  CHECK(!rtx::audio_pts_outside_budget(0, 1000, 1.0 / 48000.0, 0.5));
+  CHECK(rtx::audio_pts_outside_budget(0, 48000, 1.0 / 48000.0, 0.5));
+  CHECK(!rtx::audio_pts_outside_budget(2000, 1000, 1.0 / 48000.0, 0.5));
   return rtx_test::result();
 }

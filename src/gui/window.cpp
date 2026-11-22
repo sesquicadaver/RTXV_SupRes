@@ -35,6 +35,7 @@
 #include <QStandardPaths>
 #include <QTableWidget>
 #include <QTimer>
+#include <QVariant>
 #include <QVBoxLayout>
 
 namespace {
@@ -205,6 +206,13 @@ void Window::stop_process(QProcess* process) {
     return;
   }
   process->disconnect(this);
+  force_stop_process(process);
+}
+
+void Window::force_stop_process(QProcess* process) {
+  if (process == nullptr || process->state() == QProcess::NotRunning) {
+    return;
+  }
   process->write("stop\n");
   if (process->waitForFinished(3000)) {
     return;
@@ -221,14 +229,17 @@ void Window::request_stop(QProcess* process, quint64 token, quint64* epoch) {
   if (process == nullptr || epoch == nullptr || process->state() == QProcess::NotRunning) {
     return;
   }
+  process->setProperty("rtx_stop_generation", QVariant::fromValue(token));
   process->write("stop\n");
   QTimer::singleShot(3000, this, [this, process, token, epoch] {
-    if (*epoch != token || process->state() == QProcess::NotRunning) {
+    if (*epoch != token || process->property("rtx_stop_generation").toULongLong() != token ||
+        process->state() == QProcess::NotRunning) {
       return;
     }
     process->terminate();
     QTimer::singleShot(1000, this, [this, process, token, epoch] {
-      if (*epoch != token || process->state() == QProcess::NotRunning) {
+      if (*epoch != token || process->property("rtx_stop_generation").toULongLong() != token ||
+          process->state() == QProcess::NotRunning) {
         return;
       }
       process->kill();
@@ -725,35 +736,34 @@ void Window::check_selected_gpu() {
     return;
   }
   const QString uuid = gpu_->currentData().toString();
-  const QString codec = doctor_.value("nvenc_h264").toBool(true) ? "h264" : "hevc";
   if (uuid.isEmpty()) {
     return;
   }
-  QStringList args{"doctor", "--json", "--gpu-uuid", uuid};
-  if (codec == "h264" || codec == "hevc") {
-    args << "--codec" << codec;
+  // Без повторного doctor/SDK на кожну зміну combo: беремо кеш reload_gpus.
+  bool listed = false;
+  for (const QJsonValue& value : doctor_.value("gpus").toArray()) {
+    if (value.toObject().value("uuid").toString() == uuid) {
+      listed = true;
+      break;
+    }
   }
-  auto* process = new QProcess(this);
-  connect(process, &QProcess::finished, this, [this, process, uuid, codec](int, QProcess::ExitStatus) {
-    const QJsonObject doctor = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
-    process->deleteLater();
-    if (running_ || gpu_->currentData().toString() != uuid) {
-      return;
-    }
-    const bool effect = doctor.value("effect").toString() == "confirmed";
-    QStringList blockers;
-    for (const QJsonValue& blocker : doctor.value("blockers").toArray()) {
-      blockers.push_back(blocker.toString());
-    }
-    const bool encoder = codec == "hevc" ? doctor.value("nvenc_hevc").toBool() : doctor.value("nvenc_h264").toBool();
-    QString text = effect ? "VSR на цій карті підтверджено створенням ефекту."
-                          : (blockers.isEmpty() ? "VSR на цій карті не підтверджено." : blockers.join(" "));
-    text += encoder ? " Кодер вибраного виходу є у FFmpeg, але це ще не весь конвеєр."
-                    : " Кодера вибраного виходу у FFmpeg немає.";
-    text += " Придатність до конкретного потоку підтверджується запуском сеансу.";
-    gpu_fit_->setText(text);
-  });
-  process->start(proxy_program(), args);
+  const bool effect = doctor_.value("effect").toString() == "confirmed";
+  const bool encoder = doctor_.value("nvenc_h264").toBool() || doctor_.value("nvenc_hevc").toBool();
+  QStringList blockers;
+  for (const QJsonValue& blocker : doctor_.value("blockers").toArray()) {
+    blockers.push_back(blocker.toString());
+  }
+  QString text;
+  if (!listed) {
+    text = "Обраний GPU відсутній у останньому опитуванні. Оновіть список карт.";
+  } else if (effect) {
+    text = "VSR підтверджено при опитуванні GPU. Придатність до потоку — запуском сеансу.";
+  } else {
+    text = blockers.isEmpty() ? "VSR на цій карті не підтверджено." : blockers.join(" ");
+  }
+  text += encoder ? " Кодер NVENC є у FFmpeg, але це ще не весь конвеєр."
+                  : " Кодера NVENC у FFmpeg немає.";
+  gpu_fit_->setText(text);
 }
 
 void Window::fill_roles() { update_source_mode(); }
@@ -807,7 +817,6 @@ void Window::update_output_fields() {
   show_row(output_form_, output_rtp_max_, list_has(fields, "rtp_port_max"));
   show_row(output_form_, output_params_, list_has(fields, "params"));
   update_consumer();
-  check_selected_gpu();
   mark_dirty();
 }
 
@@ -1137,6 +1146,16 @@ void Window::start_proxy() {
     status_->setText("Збережений GPU відсутній, оберіть інший.");
     return;
   }
+  // Інвалідуємо таймери stop і не стартуємо поверх ще живого дочірнього процесу.
+  ++proxy_token_;
+  if (proxy_->state() != QProcess::NotRunning) {
+    status_->setText("Зупинення попереднього сеансу…");
+    force_stop_process(proxy_);
+  }
+  if (proxy_->state() != QProcess::NotRunning) {
+    status_->setText("Попередній сеанс ще не завершився");
+    return;
+  }
   const QString path = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/session.json";
   QDir().mkpath(QFileInfo(path).path());
   QString error;
@@ -1153,6 +1172,7 @@ void Window::start_proxy() {
   refresh_gpu_->setEnabled(false);
   bench_run_->setEnabled(false);
   ++proxy_token_;
+  proxy_->setProperty("rtx_stop_generation", QVariant::fromValue(proxy_token_));
   proxy_->start(proxy_program(), {"run", "--profile", path});
 }
 
@@ -1166,6 +1186,7 @@ void Window::stop_proxy() {
   }
   stopping_ = true;
   status_->setText("Зупинено");
+  ++proxy_token_;
   request_stop(proxy_, proxy_token_, &proxy_token_);
 }
 
