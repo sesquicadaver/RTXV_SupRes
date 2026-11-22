@@ -23,6 +23,25 @@ inline bool measurement_within_budget(std::uint64_t samples, double p95_ms, doub
   return samples > 0 && p95_ms <= budget_ms;
 }
 
+// Проба масштабу 3→2 до відкриття виходу (як AdaptiveQuality: два повільні).
+inline constexpr int kScaleProbeFrames = 3;
+
+inline bool scale_probe_should_reduce(int slow_count, int sample_count) {
+  if (sample_count <= 0 || slow_count <= 0) {
+    return false;
+  }
+  return sample_count == 1 ? slow_count >= 1 : slow_count >= 2;
+}
+
+// Поширені стелі NVENC (Turing+): H.264 ≤4096, HEVC ≤8192 на вісь.
+inline int nvenc_max_edge(bool hevc) { return hevc ? 8192 : 4096; }
+
+inline bool nvenc_resolution_ok(int width, int height, bool hevc) {
+  const int limit = nvenc_max_edge(hevc);
+  return width > 0 && height > 0 && (width % 2) == 0 && (height % 2) == 0 && width <= limit &&
+         height <= limit;
+}
+
 // Успішний прогін бенчмарку: процес завершився нулем, подія позначена ok, є кадри після прогріву.
 inline bool benchmark_run_valid(int exit_code, bool event_ok, std::uint64_t samples) {
   return exit_code == 0 && event_ok && samples > 0;

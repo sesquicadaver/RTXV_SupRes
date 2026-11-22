@@ -12,7 +12,7 @@
 | Перерахунок PTS між time_base, пропуски й розриви | `src/timestamps.cpp` | `tests/test_timestamps.cpp` |
 | Перевірка GPU можливостями SDK, не зашитим списком | `src/gpu_probe.cpp`, `probe_rtx_sdk` | `doctor` створює ефект лише коли SDK зібрано; інакше код 3. `nvcuda.dll` відкладено, тож без драйвера немає `0xc0000135` |
 | Адаптивна якість за повним часом кадру | `src/adaptive.cpp`, `src/pipeline.cpp` | `tests/test_adaptive.cpp` |
-| Масштаб 3 → 2 до відкриття виходу, якщо перший кадр не вкладається в бюджет | `src/pipeline.cpp` | виконання на GPU; без GPU шлях недоступний |
+| Масштаб 3 → 2 до відкриття виходу за пробою кадрів (не один cold-start) або лімітом NVENC | `src/pipeline.cpp`, `src/latency.hpp` | `scale_probe_should_reduce`, `nvenc_resolution_ok`; GPU-прогін |
 | Перевантаження без росту черги | `src/mailbox.hpp` | `tests/test_mailbox.cpp` |
 | Відмова VSR не обриває потік: резервний масштаб того ж розміру | `src/gpu/rtx_processor.cu`, `src/pipeline.cpp` | виконання на GPU; `vsr_state=bypass` |
 | Колір з метаданих кадру | `src/color.cpp` | `tests/test_color.cpp` |
