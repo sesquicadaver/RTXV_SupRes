@@ -51,7 +51,8 @@
 | `stop` на консольному stdin Windows | `src/platform.hpp` | `WaitForSingleObject` для `FILE_TYPE_CHAR`, `PeekNamedPipe` для pipe |
 | Бенчмарк перевіряє `password_access_error` до запису профілю | `src/gui/window.cpp` | `start_benchmark` |
 | Час обробки проксі p95/p99 за кадрами, не згладжене середнє | `src/latency.cpp`, `src/pipeline.cpp`, `src/metrics.cpp` | `tests/test_profile.cpp`, `tests/test_metrics.cpp` |
-| Один застосунок `rtx-vsr.exe`: вікно і конвеєр, підсистема Windows, без консольного вікна | `src/main.cpp`, `src/gui/`, `CMakeLists.txt` (`WIN32`, `/ENTRY:mainCRTStartup`) | `gui_self_check` (`rtx-vsr --self-check`, `QT_QPA_PLATFORM=offscreen`). Подвійний клік не відкриває консоль |
+| Один застосунок `rtx-vsr.exe`: вікно і конвеєр, підсистема Windows, без консольного вікна | `src/main.cpp`, `src/gui/window*.cpp`, `CMakeLists.txt` (`WIN32`, `/ENTRY:mainCRTStartup`) | `gui_self_check` (`rtx-vsr --self-check`, `QT_QPA_PLATFORM=offscreen`). Подвійний клік не відкриває консоль |
+| GUI не God-object в одному `.cpp`: профіль і бенчмарк окремо | `src/gui/window.cpp`, `window_profile.cpp`, `window_benchmark.cpp`, `window_helpers.*` | збірка `rtx-vsr`; логіка рознесена за TU |
 | Користувач обирає лише протокол; поля вводу змінює вікно | `src/gui/window.cpp` | список «Протокол»; `setRowVisible(QWidget*)` лишає поля цього протоколу |
 | Іконка робочого столу, ярлика і вікна — `rtx-vsr.ico` (16…256) | `RTXV_SupRes-icon/rtx-vsr.ico`, ресурс exe, `src/gui/icons.qrc`, `packaging/rtx-vsr.iss` | `gui_self_check` перевіряє кадри 16 і 256 у вікні; Провідник читає іконку з `rtx-vsr.exe` |
 | Інсталятор бачить відсутні Qt, платформу вікна, FFmpeg, nvngx і VC++ і ставить їх лише після підтвердження | `packaging/rtx-vsr.iss`, `packaging/stage_product.ps1` | `platforms\qwindows.dll` копіюється з Qt `plugins\platforms` у комплект; без нього setup не збирається; у програму лягає в `{app}\platforms` |

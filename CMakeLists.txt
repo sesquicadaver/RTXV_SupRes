@@ -245,7 +245,11 @@ if(TARGET Qt6::Widgets)
     src/main.cpp
     src/gui/main.cpp
     src/gui/window.cpp
+    src/gui/window_profile.cpp
+    src/gui/window_benchmark.cpp
+    src/gui/window_helpers.cpp
     src/gui/window.hpp
+    src/gui/window_helpers.hpp
     src/gui/app.hpp
     src/gui/icons.qrc
     "${CMAKE_CURRENT_BINARY_DIR}/rtx-vsr.rc")
