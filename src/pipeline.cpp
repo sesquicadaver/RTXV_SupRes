@@ -3,12 +3,14 @@
 #include "profile.hpp"
 
 #include "adaptive.hpp"
+#include "audio_copy.hpp"
 #include "color.hpp"
 #include "dependencies.hpp"
 #include "hls_server.hpp"
 #include "latency.hpp"
 #include "mailbox.hpp"
 #include "metrics.hpp"
+#include "path_utf8.hpp"
 #include "platform.hpp"
 #include "json_mini.hpp"
 #include "report.hpp"
@@ -19,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -184,8 +187,8 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
   if (input.ffmpeg_url.empty() || output.ffmpeg_url.empty()) {
     return {};
   }
-  const fs::path in_path(input.ffmpeg_url);
-  const fs::path out_path(output.ffmpeg_url);
+  const fs::path in_path = path_from_utf8(input.ffmpeg_url);
+  const fs::path out_path = path_from_utf8(output.ffmpeg_url);
   if (!fs::is_regular_file(in_path, error)) {
     return {};
   }
@@ -200,14 +203,15 @@ std::string same_file_error(const BuiltEndpoint& input, const BuiltEndpoint& out
 void prepare_hls(BuiltEndpoint& output, HlsServer& server) {
   namespace fs = std::filesystem;
   if (output.serve_root.empty()) {
-    output.serve_root = (fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(process_id()))).string();
+    output.serve_root = utf8_from_path(fs::temp_directory_path() / ("rtx-vsr-hls-" + std::to_string(process_id())));
   }
-  fs::create_directories(output.serve_root);
-  output.ffmpeg_url = (fs::path(output.serve_root) / "index.m3u8").string();
+  const fs::path root = path_from_utf8(output.serve_root);
+  fs::create_directories(root);
+  output.ffmpeg_url = utf8_from_path(root / "index.m3u8");
   output.format_options.emplace("hls_time", "1");
   output.format_options.emplace("hls_list_size", "3");
   output.format_options.emplace("hls_flags", "delete_segments+append_list+omit_endlist+independent_segments");
-  output.format_options.emplace("hls_segment_filename", (fs::path(output.serve_root) / "seg_%05d.ts").string());
+  output.format_options.emplace("hls_segment_filename", utf8_from_path(root / "seg_%05d.ts"));
   std::string error;
   if (!server.start(output.serve_host, output.serve_port, output.serve_root, error)) {
     throw std::runtime_error(error);
@@ -245,9 +249,15 @@ struct Session {
   Metrics metrics;
   std::mutex error_mu;
   std::string error;
-  bool header_written = false;
+  std::atomic<bool> header_written{false};
   bool bypass_logged = false;
   int video_index = -1;
+  int video_out_index = 0;
+  int audio_index = -1;
+  int audio_out_index = -1;
+  bool audio_error_logged = false;
+  std::deque<AVPacket*> audio_queue;
+  std::mutex write_mu;
   int active_scale = 2;
   double budget_ms = 33.3;
   double frame_write_ms = 0;
@@ -284,6 +294,11 @@ struct Session {
     if (processor) {
       processor->close();
       processor.reset();
+    }
+    while (!audio_queue.empty()) {
+      AVPacket* held = audio_queue.front();
+      audio_queue.pop_front();
+      av_packet_free(&held);
     }
     if (packet != nullptr) {
       av_packet_free(&packet);
@@ -378,6 +393,10 @@ struct Session {
     video_index = av_find_best_stream(input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (video_index < 0) {
       throw std::runtime_error("у вході немає відеопотоку");
+    }
+    audio_index = av_find_best_stream(input, AVMEDIA_TYPE_AUDIO, -1, video_index, nullptr, 0);
+    if (audio_index < 0) {
+      audio_index = -1;
     }
   }
 
@@ -551,6 +570,7 @@ struct Session {
     }
     throw_if(avcodec_parameters_from_context(out_stream->codecpar, encoder), "параметри NVENC");
     out_stream->time_base = encoder->time_base;
+    video_out_index = out_stream->index;
     for (const auto& option : built.format_options) {
       const int option_status = av_opt_set(output->priv_data, option.first.c_str(), option.second.c_str(), 0);
       if (option_status < 0) {
@@ -571,8 +591,9 @@ struct Session {
                "відкриття виходу");
       ensure_consumed(io_options, "вихід");
     }
+    attach_audio();
     throw_if(avformat_write_header(output, nullptr), "заголовок виходу");
-    header_written = true;
+    header_written.store(true, std::memory_order_release);
     sdp_path = built.sdp_path;
     if (!sdp_path.empty()) {
       write_sdp();
@@ -592,7 +613,7 @@ struct Session {
     char buffer[8192];
     AVFormatContext* contexts[] = {output};
     throw_if(av_sdp_create(contexts, 1, buffer, static_cast<int>(sizeof(buffer))), "SDP");
-    const std::filesystem::path path(sdp_path);
+    const std::filesystem::path path = path_from_utf8(sdp_path);
     if (path.has_parent_path()) {
       std::filesystem::create_directories(path.parent_path());
     }
@@ -603,11 +624,109 @@ struct Session {
     file << buffer;
   }
 
+  void attach_audio() {
+    audio_out_index = -1;
+    if (audio_index < 0 || input == nullptr || output == nullptr || output->oformat == nullptr) {
+      return;
+    }
+    const AVStream* in_audio = input->streams[audio_index];
+    const char* format_name = output->oformat->name != nullptr ? output->oformat->name : "";
+    if (!muxer_carries_audio(format_name, in_audio->codecpar->codec_id)) {
+      std::cerr << "аудіо не вміщує цей вихід\n";
+      return;
+    }
+    AVStream* out_audio = avformat_new_stream(output, nullptr);
+    if (out_audio == nullptr) {
+      throw std::runtime_error("немає вихідного аудіопотоку");
+    }
+    throw_if(avcodec_parameters_copy(out_audio->codecpar, in_audio->codecpar), "параметри аудіо");
+    out_audio->codecpar->codec_tag = 0;
+    out_audio->time_base = in_audio->time_base;
+    audio_out_index = out_audio->index;
+    std::cerr << "аудіо: копія потоку\n";
+  }
+
+  void enqueue_audio(AVPacket* incoming) {
+    AVPacket* held = av_packet_alloc();
+    if (held == nullptr) {
+      av_packet_unref(incoming);
+      return;
+    }
+    av_packet_move_ref(held, incoming);
+    audio_queue.push_back(held);
+    while (audio_queue.size() > 64) {
+      AVPacket* old = audio_queue.front();
+      audio_queue.pop_front();
+      av_packet_free(&old);
+    }
+  }
+
+  void discard_audio_queue() {
+    while (!audio_queue.empty()) {
+      AVPacket* held = audio_queue.front();
+      audio_queue.pop_front();
+      av_packet_free(&held);
+    }
+  }
+
+  void write_audio_packet(AVPacket* incoming) {
+    AVStream* in_audio = input->streams[audio_index];
+    AVStream* out_audio = output->streams[audio_out_index];
+    av_packet_rescale_ts(incoming, in_audio->time_base, out_audio->time_base);
+    incoming->stream_index = out_audio->index;
+    incoming->pos = -1;
+    const int status = av_interleaved_write_frame(output, incoming);
+    if (status < 0) {
+      if (!audio_error_logged) {
+        audio_error_logged = true;
+        std::cerr << "аудіо не записано: " << ffmpeg_error(status) << '\n';
+      }
+      av_packet_unref(incoming);
+    }
+  }
+
+  void flush_audio_queue() {
+    while (!audio_queue.empty()) {
+      AVPacket* held = audio_queue.front();
+      audio_queue.pop_front();
+      write_audio_packet(held);
+      av_packet_free(&held);
+    }
+  }
+
+  void drain_pending_audio() {
+    if (!header_written.load(std::memory_order_acquire) || audio_queue.empty()) {
+      return;
+    }
+    if (audio_out_index < 0) {
+      discard_audio_queue();
+      return;
+    }
+    std::lock_guard<std::mutex> lock(write_mu);
+    flush_audio_queue();
+  }
+
+  void forward_audio(AVPacket* incoming) {
+    if (!header_written.load(std::memory_order_acquire)) {
+      enqueue_audio(incoming);
+      return;
+    }
+    if (audio_out_index < 0) {
+      discard_audio_queue();
+      av_packet_unref(incoming);
+      return;
+    }
+    std::lock_guard<std::mutex> lock(write_mu);
+    flush_audio_queue();
+    write_audio_packet(incoming);
+  }
+
   void write_packet(AVPacket* encoded) {
     const auto started = std::chrono::steady_clock::now();
-    AVStream* stream = output->streams[0];
+    AVStream* stream = output->streams[video_out_index];
     av_packet_rescale_ts(encoded, encoder->time_base, stream->time_base);
     encoded->stream_index = stream->index;
+    std::lock_guard<std::mutex> lock(write_mu);
     throw_if(av_interleaved_write_frame(output, encoded), "запис виходу");
     frame_write_ms += elapsed_ms(started, std::chrono::steady_clock::now());
   }
@@ -638,6 +757,7 @@ struct Session {
     auto sent_at = std::chrono::steady_clock::now();
     bool sent = false;
     while (running.load()) {
+      drain_pending_audio();
       const int received = avcodec_receive_frame(decoder, frame);
       if (received == 0) {
         if (frame->format != AV_PIX_FMT_CUDA) {
@@ -657,6 +777,7 @@ struct Session {
       }
       const int read = av_read_frame(input, incoming);
       if (read == AVERROR_EOF || read == AVERROR_EXIT) {
+        drain_pending_audio();
         if (decoder_flushed) {
           return false;
         }
@@ -674,6 +795,10 @@ struct Session {
       if (read < 0) {
         fail("читання входу: " + ffmpeg_error(read));
         return false;
+      }
+      if (incoming->stream_index == audio_index) {
+        forward_audio(incoming);
+        continue;
       }
       if (incoming->stream_index != video_index) {
         av_packet_unref(incoming);
@@ -1051,7 +1176,7 @@ int run_proxy(const Settings& settings, const std::vector<Mode>& modes, const Op
     if (output_built.application_hls) {
       prepare_hls(output_built, hls);
     } else if (settings.output.protocol == "file") {
-      const std::filesystem::path parent = std::filesystem::path(output_built.ffmpeg_url).parent_path();
+      const std::filesystem::path parent = path_from_utf8(output_built.ffmpeg_url).parent_path();
       if (!parent.empty()) {
         std::filesystem::create_directories(parent);
       }

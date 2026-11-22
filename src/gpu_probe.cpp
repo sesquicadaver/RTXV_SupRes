@@ -83,6 +83,24 @@ bool load_cuda(CudaApi& api, std::string& note) {
 
 }  // namespace
 
+bool cuda_driver_library_present() {
+#if defined(_WIN32)
+  HMODULE library = LoadLibraryA("nvcuda.dll");
+  if (library == nullptr) {
+    return false;
+  }
+  FreeLibrary(library);
+  return true;
+#else
+  void* library = dlopen("libcuda.so.1", RTLD_LAZY);
+  if (library == nullptr) {
+    return false;
+  }
+  dlclose(library);
+  return true;
+#endif
+}
+
 std::vector<GpuInfo> probe_cuda_devices(std::string& note) {
   std::vector<GpuInfo> devices;
   CudaApi api;

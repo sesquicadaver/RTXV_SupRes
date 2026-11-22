@@ -1,6 +1,7 @@
 #include "rtx_processor.hpp"
 
 #include "color.hpp"
+#include "gpu_probe.hpp"
 
 #include <chrono>
 #include <stdexcept>
@@ -483,6 +484,9 @@ std::string probe_rtx_sdk(int gpu_index) {
   (void)gpu_index;
   return "перевірка компіляції CUDA не є NVIDIA RTX Video SDK";
 #else
+  if (!cuda_driver_library_present()) {
+    return "бібліотеку CUDA-драйвера не знайдено";
+  }
   if (cuInit(0) != CUDA_SUCCESS) {
     return "cuInit не вдався";
   }

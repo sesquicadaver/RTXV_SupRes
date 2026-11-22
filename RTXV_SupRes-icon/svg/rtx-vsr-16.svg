@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" role="img" aria-labelledby="title">
+  <title id="title">RTX VSR — розширення кадру</title>
+  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#171B21"/>
+  <g fill="none" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8.5 5.5H3.5V11.5H12.5V9.5" stroke="#E9EEF4"/>
+    <path d="M8.5 9.5L12.5 5.5M10.5 5.5H12.5V7.5" stroke="#A6E22E"/>
+  </g>
+</svg>

@@ -12,12 +12,12 @@ class QTimer;
 
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
-class QRadioButton;
 class QSpinBox;
 class QTableWidget;
 class QWidget;
@@ -76,8 +76,8 @@ class Window : public QMainWindow {
   QPushButton* save_ = nullptr;
   QPushButton* save_as_ = nullptr;
   QLabel* dirty_ = nullptr;
-  QRadioButton* source_url_ = nullptr;
-  QRadioButton* source_fields_ = nullptr;
+  QFormLayout* source_form_ = nullptr;
+  QFormLayout* output_form_ = nullptr;
   QLineEdit* url_ = nullptr;
   QComboBox* input_protocol_ = nullptr;
   QLineEdit* input_host_ = nullptr;
@@ -147,6 +147,7 @@ class Window : public QMainWindow {
   QByteArray bench_stdout_;
   QString bench_wait_reason_;
   bool running_ = false;
+  bool stopping_ = false;
   bool bench_abort_ = false;
   bool bench_settled_ = false;
   quint64 proxy_token_ = 0;

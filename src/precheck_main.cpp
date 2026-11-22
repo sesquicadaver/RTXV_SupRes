@@ -4,6 +4,8 @@
 #error "rtx-vsr-precheck збирається лише для Windows і не лінкує CUDA"
 #else
 
+#include "path_utf8.hpp"
+
 #include <windows.h>
 #include <devguid.h>
 #include <setupapi.h>
@@ -32,7 +34,7 @@ std::string narrow(const std::wstring& text) {
 }
 
 bool read_file(const std::string& path, std::string& text) {
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(path_from_utf8(path), std::ios::binary);
   if (!input) {
     return false;
   }
@@ -174,7 +176,7 @@ void collect_processes(HostFacts& host) {
       for (char& symbol : name) {
         symbol = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol)));
       }
-      if (name == "rtx-vsr-proxy.exe" || name == "rtx-vsr-gui.exe") {
+      if (name == "rtx-vsr.exe") {
         host.app_running = true;
         break;
       }
@@ -230,7 +232,7 @@ int precheck_entry(int argc, char** argv) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
   } else {
-    std::ofstream output(out_path, std::ios::binary);
+    std::ofstream output(path_from_utf8(out_path), std::ios::binary);
     if (!output) {
       return 2;
     }

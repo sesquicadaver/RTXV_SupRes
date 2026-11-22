@@ -131,6 +131,24 @@ int main() {
   hls.local_host = "127.0.0.1";
   hls.local_port = 8080;
   CHECK(rtx::consumer_address(hls) == "http://127.0.0.1:8080/index.m3u8");
+  rtx::Endpoint hls_client;
+  hls_client.protocol = "hls";
+  hls_client.role = "client";
+  hls_client.remote_host = "192.168.1.10";
+  hls_client.remote_port = 8080;
+  hls_client.path = "/live/index.m3u8";
+  CHECK(rtx::consumer_address(hls_client).empty());
+  rtx::Endpoint hls_legacy;
+  hls_legacy.url = "hls://192.168.1.10:8080/live/index.m3u8";
+  CHECK(rtx::consumer_address(hls_legacy) == "http://192.168.1.10:8080/live/index.m3u8");
+  rtx::Endpoint rtmp;
+  rtmp.protocol = "rtmp";
+  rtmp.role = "client";
+  rtmp.remote_host = "127.0.0.1";
+  rtmp.remote_port = 1935;
+  rtmp.app = "live";
+  rtmp.playpath = "stream1";
+  CHECK(rtx::consumer_address(rtmp) == "rtmp://127.0.0.1:1935/live/stream1");
 
   const auto decoded = std::chrono::steady_clock::time_point{};
   const auto ready = decoded + std::chrono::milliseconds(100);
