@@ -322,6 +322,7 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     bench_abort_ = true;
     bench_wait_reason_ = "немає споживача";
     status_->setText("Очікування споживача вичерпано");
+    ++bench_token_;
     request_stop(bench_, bench_token_, &bench_token_);
   });
   reload_modes();
@@ -1327,6 +1328,7 @@ void Window::cancel_benchmark() {
   bench_wait_reason_ = "скасовано";
   bench_wait_timer_->stop();
   if (bench_->state() != QProcess::NotRunning) {
+    ++bench_token_;
     request_stop(bench_, bench_token_, &bench_token_);
     return;
   }
