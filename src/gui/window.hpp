@@ -68,6 +68,7 @@ class Window : public QMainWindow {
   void cancel_benchmark();
   void read_benchmark();
   void stop_process(QProcess* process);
+  void force_stop_process(QProcess* process);
   void request_stop(QProcess* process, quint64 token, quint64* epoch);
   void apply_input_rtp_payload(rtx::Profile& profile) const;
   QString proxy_program() const;

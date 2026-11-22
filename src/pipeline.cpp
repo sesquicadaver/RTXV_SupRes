@@ -694,6 +694,28 @@ struct Session {
     std::cerr << "аудіо: копія потоку\n";
   }
 
+  void trim_audio_queue() {
+    while (static_cast<int>(audio_queue.size()) > kAudioQueueMaxPackets) {
+      AVPacket* old = audio_queue.front();
+      audio_queue.pop_front();
+      av_packet_free(&old);
+    }
+    if (audio_queue.size() < 2 || audio_index < 0 || input == nullptr) {
+      return;
+    }
+    const AVStream* in_audio = input->streams[audio_index];
+    const AVPacket* newest = audio_queue.back();
+    const double tb = av_q2d(in_audio->time_base);
+    while (audio_queue.size() > 1) {
+      AVPacket* old = audio_queue.front();
+      if (!audio_pts_outside_budget(old->pts, newest->pts, tb, kAudioQueueMaxSeconds)) {
+        break;
+      }
+      audio_queue.pop_front();
+      av_packet_free(&old);
+    }
+  }
+
   void enqueue_audio(AVPacket* incoming) {
     AVPacket* held = av_packet_alloc();
     if (held == nullptr) {
@@ -702,11 +724,7 @@ struct Session {
     }
     av_packet_move_ref(held, incoming);
     audio_queue.push_back(held);
-    while (audio_queue.size() > 64) {
-      AVPacket* old = audio_queue.front();
-      audio_queue.pop_front();
-      av_packet_free(&old);
-    }
+    trim_audio_queue();
   }
 
   void discard_audio_queue() {
@@ -779,8 +797,9 @@ struct Session {
     frame_write_ms += elapsed_ms(started, std::chrono::steady_clock::now());
   }
 
-  void drain_encoder() {
-    while (running.load()) {
+  // ignore_stop — фінальний drain після EOF; не піднімає running, щоб interrupt_cb лишався чутливим.
+  void drain_encoder(bool ignore_stop = false) {
+    while (ignore_stop || running.load()) {
       const int status = avcodec_receive_packet(encoder, packet);
       if (status == AVERROR(EAGAIN) || status == AVERROR_EOF) {
         return;
@@ -1106,9 +1125,7 @@ struct Session {
     if (error.empty() && encoder != nullptr) {
       avcodec_send_frame(encoder, nullptr);
       try {
-        running.store(true);
-        drain_encoder();
-        running.store(false);
+        drain_encoder(true);
       } catch (const std::exception& ex) {
         fail(ex.what());
       }

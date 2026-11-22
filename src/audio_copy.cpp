@@ -3,6 +3,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
 }
 
 namespace rtx {
@@ -25,6 +26,18 @@ bool muxer_carries_audio(const std::string& format_name, int codec_id) {
   }
   // 0 — муксер прямо відмовив. 1 — підтвердив. Від'ємне — немає явної відповіді (MPEG-TS і AAC).
   return avformat_query_codec(format, id, FF_COMPLIANCE_NORMAL) != 0;
+}
+
+bool audio_pts_outside_budget(std::int64_t packet_pts, std::int64_t newest_pts, double time_base_seconds,
+                              double keep_seconds) {
+  if (packet_pts == AV_NOPTS_VALUE || newest_pts == AV_NOPTS_VALUE || time_base_seconds <= 0 || keep_seconds <= 0) {
+    return false;
+  }
+  if (newest_pts < packet_pts) {
+    return false;
+  }
+  const double age_seconds = static_cast<double>(newest_pts - packet_pts) * time_base_seconds;
+  return age_seconds > keep_seconds;
 }
 
 }  // namespace rtx
