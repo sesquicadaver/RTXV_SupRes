@@ -292,6 +292,7 @@ function OfferMissingDependencies(const RuntimeChoice, Manifest: String): String
 var
   Missing, Offer: String;
 begin
+  { Список exact/glob — packaging/runtime_required.txt (deploy_runtime + stage_product). }
   Result := '';
   if (not ManifestLists(Manifest, 'Qt6Widgets.dll')) or (not ManifestLists(Manifest, 'avformat-61.dll')) or
      (not ManifestLists(Manifest, 'avcodec-61.dll')) or (not ManifestLists(Manifest, 'avutil-59.dll')) or

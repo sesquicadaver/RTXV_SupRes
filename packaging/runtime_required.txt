@@ -1,0 +1,11 @@
+# Канонічний маніфест runtime поруч із rtx-vsr.exe і в packaging/dist/windows.
+# exact — відносний шлях з /.
+# glob — маска файлу в корені комплекту.
+# Має збігатися з перевірками packaging/rtx-vsr.iss (OfferMissingDependencies).
+exact Qt6Widgets.dll
+exact platforms/qwindows.dll
+exact avformat-61.dll
+exact avcodec-61.dll
+exact avutil-59.dll
+exact nvngx_vsr.dll
+glob cudart64_*.dll

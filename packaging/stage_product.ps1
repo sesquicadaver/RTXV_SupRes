@@ -171,13 +171,30 @@ Copy-Item -LiteralPath $InstallClip $clip -Force
 if (-not (Test-Path -LiteralPath $clip) -or (Get-Item -LiteralPath $clip).Length -le 0) {
   Fail "install-check.h264 порожній"
 }
-foreach ($name in @("Qt6Widgets.dll", "platforms\qwindows.dll", "avformat-61.dll", "avcodec-61.dll", "avutil-59.dll", "nvngx_vsr.dll")) {
-  if (-not (Test-Path -LiteralPath (Join-Path $Dist $name))) {
-    Fail "у комплекті немає $name"
-  }
+$runtimeManifest = Join-Path $PSScriptRoot "runtime_required.txt"
+if (-not (Test-Path -LiteralPath $runtimeManifest)) {
+  Fail "немає $runtimeManifest"
 }
-if (-not (Get-ChildItem $Dist -Filter "cudart64_*.dll")) {
-  Fail "у комплекті немає cudart64_*.dll"
+Get-Content -LiteralPath $runtimeManifest | ForEach-Object {
+  $line = $_.Trim()
+  if ($line -eq "" -or $line.StartsWith("#")) {
+    return
+  }
+  if ($line -match '^exact\s+(.+)$') {
+    $name = $Matches[1] -replace '/', '\'
+    if (-not (Test-Path -LiteralPath (Join-Path $Dist $name))) {
+      Fail "у комплекті немає $name (runtime_required.txt)"
+    }
+    return
+  }
+  if ($line -match '^glob\s+(.+)$') {
+    $pattern = $Matches[1]
+    if (-not (Get-ChildItem -LiteralPath $Dist -Filter $pattern -ErrorAction SilentlyContinue)) {
+      Fail "у комплекті немає $pattern (runtime_required.txt)"
+    }
+    return
+  }
+  Fail "некоректний рядок у runtime_required.txt: $line"
 }
 # Той самий комплект, що й у інсталяторі: інакше подвійний клік по build\Release\rtx-vsr.exe
 # показує відсутні Qt6Widgets.dll і avformat-61.dll.
