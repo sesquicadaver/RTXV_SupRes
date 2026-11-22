@@ -146,9 +146,11 @@ class Window : public QMainWindow {
   QString loaded_url_;
   QString unresolved_gpu_;
   QByteArray bench_stdout_;
+  int bench_stdout_scan_ = 0;
   QString bench_wait_reason_;
   bool running_ = false;
   bool stopping_ = false;
+  bool closing_ = false;
   bool bench_abort_ = false;
   bool bench_settled_ = false;
   quint64 proxy_token_ = 0;

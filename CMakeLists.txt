@@ -61,6 +61,7 @@ add_library(rtx_core STATIC
   src/profile.cpp
   src/report.cpp
   src/install_check.cpp
+  src/delay_load_hook.cpp
 )
 target_include_directories(rtx_core PUBLIC src)
 target_link_libraries(rtx_core PUBLIC ${RTX_FFMPEG} Threads::Threads)

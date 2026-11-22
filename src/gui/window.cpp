@@ -193,11 +193,28 @@ Window::~Window() {
 }
 
 void Window::closeEvent(QCloseEvent* event) {
-  bench_abort_ = true;
-  ++proxy_token_;
-  ++bench_token_;
-  stop_process(proxy_);
-  stop_process(bench_);
+  const bool busy = (proxy_ != nullptr && proxy_->state() != QProcess::NotRunning) ||
+                    (bench_ != nullptr && bench_->state() != QProcess::NotRunning);
+  if (busy) {
+    event->ignore();
+    if (closing_) {
+      return;
+    }
+    closing_ = true;
+    bench_abort_ = true;
+    stopping_ = true;
+    ++proxy_token_;
+    ++bench_token_;
+    if (proxy_ != nullptr && proxy_->state() != QProcess::NotRunning) {
+      request_stop(proxy_, proxy_token_, &proxy_token_);
+    }
+    if (bench_ != nullptr && bench_->state() != QProcess::NotRunning) {
+      request_stop(bench_, bench_token_, &bench_token_);
+    }
+    status_->setText("Завершення сеансу…");
+    return;
+  }
+  closing_ = false;
   QMainWindow::closeEvent(event);
 }
 
@@ -284,6 +301,12 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     gpu_->setEnabled(true);
     refresh_gpu_->setEnabled(true);
     bench_run_->setEnabled(true);
+    if (closing_) {
+      if (bench_ == nullptr || bench_->state() == QProcess::NotRunning) {
+        close();
+      }
+      return;
+    }
     if (user_stop) {
       status_->setText("Зупинено");
       return;
@@ -306,7 +329,15 @@ Window::Window(QWidget* parent) : QMainWindow(parent) {
     status_->setText("Не вдалося запустити RTX VSR");
   });
   connect(bench_, &QProcess::readyReadStandardOutput, this, &Window::read_benchmark);
-  connect(bench_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) { finish_benchmark(); });
+  connect(bench_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
+    if (closing_) {
+      if (proxy_ == nullptr || proxy_->state() == QProcess::NotRunning) {
+        close();
+      }
+      return;
+    }
+    finish_benchmark();
+  });
   connect(bench_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
     if (error != QProcess::FailedToStart || bench_settled_) {
       return;
@@ -1317,6 +1348,7 @@ void Window::run_next_benchmark() {
   }
   status_->setText(QString("Бенчмарк %1/%2").arg(bench_index_ + 1).arg(bench_queue_.size()));
   bench_stdout_.clear();
+  bench_stdout_scan_ = 0;
   bench_settled_ = false;
   bench_wait_timer_->stop();
   ++bench_token_;
@@ -1341,14 +1373,15 @@ void Window::cancel_benchmark() {
 
 void Window::read_benchmark() {
   bench_stdout_.append(bench_->readAllStandardOutput());
-  int offset = 0;
-  while (offset < bench_stdout_.size()) {
-    const int end = bench_stdout_.indexOf('\n', offset);
+  // Скануємо лише новий хвіст — без повторного проходу з нуля (O(N²)) і без втрати benchmark-рядків.
+  while (bench_stdout_scan_ < bench_stdout_.size()) {
+    const int end = bench_stdout_.indexOf('\n', bench_stdout_scan_);
     if (end < 0) {
       break;
     }
-    const QJsonObject event = QJsonDocument::fromJson(bench_stdout_.mid(offset, end - offset)).object();
-    offset = end + 1;
+    const QJsonObject event =
+        QJsonDocument::fromJson(bench_stdout_.mid(bench_stdout_scan_, end - bench_stdout_scan_)).object();
+    bench_stdout_scan_ = end + 1;
     if (event.value("type").toString() != "status") {
       continue;
     }

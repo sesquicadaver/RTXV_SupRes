@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 
+#include "json_mini.hpp"
+
 #include <algorithm>
 #include <map>
 #include <set>
@@ -336,27 +338,6 @@ void add_hls(std::vector<Mode>& modes) {
         {"local_host", "directory", "params"}, false,
         "HLS-сервер застосунку: FFmpeg пише плейлист, застосунок віддає його по HTTP. Затримка більша, ніж у MPEG-TS."));
   }
-}
-
-std::string json_escape(const std::string& text) {
-  std::string out;
-  for (const char ch : text) {
-    switch (ch) {
-      case '\\':
-        out += "\\\\";
-        break;
-      case '"':
-        out += "\\\"";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      default:
-        out += ch;
-        break;
-    }
-  }
-  return out;
 }
 
 std::string join_csv(const std::vector<std::string>& values) {
